@@ -1,0 +1,36 @@
+.background {
+    background-color: #edddf0;
+    min-height: 100vh;         
+
+}
+
+.text-title {
+    color: #766b78;
+}
+
+.button {
+    background-color: #766b78;
+    color: #504552;
+    border-radius:5px;
+    transition: background-color 0.3s;
+}
+
+.button-small{
+    background-color: #766b78;
+    color: #504552;
+    border-radius:5px;
+    transition: background-color 0.3s;
+    padding: 4px 7px;
+}
+
+.button-small:hover{
+    background-color: #413842;
+
+}
+.button:hover {
+    background-color: #413842;
+}
+
+
+
+

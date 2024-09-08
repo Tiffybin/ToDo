@@ -2,9 +2,10 @@ module Main exposing (..)
 
 import Browser
 import Html exposing (..)
-import Html.Attributes exposing (attribute, class, id, placeholder, tabindex, type_, value)
+import Html.Attributes exposing (attribute, class, disabled, for, form, id, name, placeholder, tabindex, type_, value)
 import Html.Events exposing (onClick, onInput)
 import Html5.DragDrop
+import Json.Encode
 import List.Extra
 
 
@@ -47,6 +48,10 @@ remove i list =
 
 update : Msg -> Model -> Model
 update msg model =
+    let
+        x =
+            Debug.log "logging this" (Json.Encode.encode 0 (encoder model.items))
+    in
     case msg of
         Delete i ->
             { model | items = remove i model.items }
@@ -84,14 +89,18 @@ editBullet newString bullet =
 
 view : Model -> Html Msg
 view model =
-    div []
-        [ text "To-Do List"
+    div [ class "background" ]
+        [ p [ class "text-center fs-1 fw-bold font-monospace text-title " ] [ text "To-Do List" ]
         , div [] []
-        , input [ placeholder "Write something", value model.userInput, onInput Change ] []
-        , button [ class "btn btn-primary", onClick Add ] [ text "+" ]
-        , ul [] (List.Extra.interweave (List.indexedMap viewBullet model.items) (List.indexedMap viewDropZone model.items))
+        , div [ class "d-flex justify-content-center align-items-center" ]
+            [ div [ class "d-flex mb-3" ]
+                [ input [ class "form-control me-3", placeholder "Write something", value model.userInput, onInput Change ] []
+                , button [ class "btn button", onClick Add ] [ text "+" ]
+                ]
+            ]
+        , div [ class "d-flex justify-content-center" ]
+            [ ul [ class "list-unstyled d-flex flex-column align-items-center" ] (List.Extra.interweave (List.indexedMap viewBullet model.items) (List.indexedMap viewDropZone model.items)) ]
         ]
-        
 
 
 getModalId : Int -> String
@@ -99,21 +108,52 @@ getModalId i =
     "id" ++ String.fromInt i
 
 
-viewModal : Int -> Html Msg
-viewModal i =
+viewModal : Int -> Bullet -> Html Msg
+viewModal i b =
     div [ class "modal fade", id (getModalId i), tabindex -1 ]
         [ div [ class "modal-dialog" ]
             [ div [ class "modal-content" ]
                 [ div [ class "modal-header" ]
-                    [ h5 [ class "modal-title" ] [ text "" ]
+                    [ h5 [ class "modal-title" ] [ text ("Additional Details for " ++ b.title) ]
                     , button [ type_ "button", class "btn-close", attribute "data-bs-dismiss" "modal", attribute "aria-label" "Close" ] []
                     ]
                 , div [ class "modal-body" ]
-                    [ text ""
+                    [ Html.form []
+                        [ div [ class "form-group" ]
+                            [ label [ for "notes", class "col-form-label" ] [ text "Notes:" ]
+                            , input [ type_ "text", class "form-control", id "notes" ] []
+                            ]
+                        ]
+                    ]
+                , div [] [ text "Time" ]
+                , div [ class "form-check" ]
+                    [ label [ class "form-check-label", for "radio1" ] [ text "Morning" ]
+                    , input [ class "form-check-input", type_ "radio", name "radio", id "radio1" ] []
+                    ]
+                , div [ class "form-check" ]
+                    [ label [ class "form-check-label", for "radio2" ] [ text "Afternoon" ]
+                    , input [ class "form-check-input", type_ "radio", name "radio", id "radio2" ] []
+                    ]
+                , div [ class "form-check" ]
+                    [ label [ class "form-check-label", for "radio3" ] [ text "Evening" ]
+                    , input [ class "form-check-input", type_ "radio", name "radio", id "radio3" ] []
+                    ]
+                , div [] [ text "Progress" ]
+                , div [ class "form-check" ]
+                    [ label [ class "form-check-label", for "progress1" ] [ text "Not Started" ]
+                    , input [ class "form-check-input", type_ "radio", name "progress", id "progress1" ] []
+                    ]
+                , div [ class "form-check" ]
+                    [ label [ class "form-check-label", for "progress2" ] [ text "In Progress" ]
+                    , input [ class "form-check-input", type_ "radio", name "progress", id "progress2" ] []
+                    ]
+                , div [ class "form-check" ]
+                    [ label [ class "form-check-label", for "progress3" ] [ text "Completed" ]
+                    , input [ class "form-check-input", type_ "radio", name "progress", id "progress3" ] []
                     ]
                 , div [ class "modal-footer" ]
                     [ button [ type_ "button", class "btn btn-secondary", attribute "data-bs-dismiss" "modal" ] [ text "Close" ]
-                    , button [ type_ "button", class "btn btn-primary" ] [ text "Save changes" ]
+                    , button [ type_ "button", class "btn button" ] [ text "Save changes" ]
                     ]
                 ]
             ]
@@ -156,18 +196,28 @@ insertItem index item list =
     before ++ [ item ] ++ after
 
 
-viewDropZone : Int -> Bullet ->Html Msg
-viewDropZone index b=
-    div ( Html5.DragDrop.droppable DragDropMsg index ++ [class "m-2"])[]
+viewDropZone : Int -> Bullet -> Html Msg
+viewDropZone index b =
+    div (Html5.DragDrop.droppable DragDropMsg index ++ [ class "m-2" ]) []
 
 
 viewBullet : Int -> Bullet -> Html Msg
 viewBullet i b =
-    div (Html5.DragDrop.draggable DragDropMsg i)[
-    li []
-        [ input [ value b.title, onInput (Edit i) ] []
-        , button [ onClick (Delete i) ] [ text "-" ]
-        , button [ type_ "button", attribute "data-bs-toggle" "modal", attribute "data-bs-target" ("#" ++ getModalId i) ] [ text "i" ]
-        , viewModal i
+    div (Html5.DragDrop.draggable DragDropMsg i)
+        [ li []
+            [ input [ value b.title, onInput (Edit i) ] []
+            , button [ class "btn button-small", onClick (Delete i) ] [ text "-" ]
+            , button [ class "btn button-small", type_ "button", attribute "data-bs-toggle" "modal", attribute "data-bs-target" ("#" ++ getModalId i) ] [ text "i" ]
+            , viewModal i b
+            ]
         ]
-    ]
+
+
+encoder : List Bullet -> Json.Encode.Value
+encoder items =
+    Json.Encode.list encodeBullet items
+
+
+encodeBullet : Bullet -> Json.Encode.Value
+encodeBullet b =
+    Json.Encode.object [ ( "input", Json.Encode.string b.title ) ]
