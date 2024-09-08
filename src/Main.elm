@@ -99,7 +99,7 @@ view model =
                 ]
             ]
         , div [ class "d-flex justify-content-center" ]
-            [ ul [ class "list-unstyled d-flex flex-column align-items-center" ] (List.Extra.interweave (List.indexedMap viewBullet model.items) (List.indexedMap viewDropZone model.items)) ]
+            [ ul [ class "list-unstyled flex-column align-items-center" ] (List.Extra.interweave (List.indexedMap viewBullet model.items) (List.indexedMap viewDropZone model.items)) ]
         ]
 
 
@@ -198,7 +198,7 @@ insertItem index item list =
 
 viewDropZone : Int -> Bullet -> Html Msg
 viewDropZone index b =
-    div (Html5.DragDrop.droppable DragDropMsg index ++ [ class "m-2" ]) []
+    hr (Html5.DragDrop.droppable DragDropMsg index ++ [ class "m-2" ]) []
 
 
 viewBullet : Int -> Bullet -> Html Msg
