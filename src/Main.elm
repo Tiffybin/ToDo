@@ -14,18 +14,19 @@ import Time
 main : Program () Model Msg
 main =
     Browser.element
-        { init = \_ -> ( { items = [], userInput = "", dragDrop = Html5.DragDrop.init, time = Time.millisToPosix 0 }, Cmd.none )
+        { init = \_ -> ( { items = [], userInput = "", dragDrop = Html5.DragDrop.init  }, Cmd.none )
         , subscriptions = \_ -> Sub.none
         , update = update
         , view = view
         }
+        --time = Time.millisToPosix 0
 
 
 type alias Model =
     { items : List Bullet
     , userInput : String
     , dragDrop : Html5.DragDrop.Model DragId DropId
-    , time : Time.Posix
+    -- , time : Time.Posix
     }
 
 
@@ -47,7 +48,7 @@ type Msg
     | Add
     | Edit Int String
     | DragDropMsg (Html5.DragDrop.Msg DragId DropId)
-    | Time Time.Posix
+    -- | Time Time.Posix
 
 
 remove : Int -> List Bullet -> List Bullet
@@ -92,13 +93,13 @@ update msg model =
             , Cmd.none
             )
 
-        Time psx ->
-            ( Debug.log "logging 2" { model | time = psx }, getTime )
+        -- Time psx ->
+        --     ( Debug.log "logging 2" { model | time = psx }, getTime )
 
 
-getTime : Cmd Msg
-getTime =
-    Task.perform Time Time.now
+-- getTime : Cmd Msg
+-- getTime =
+--     Task.perform Time Time.now
 
 
 editBullet : String -> Bullet -> Bullet
@@ -111,7 +112,7 @@ view model =
     div [ class "background" ]
         [ p [ class "text-center fs-1 fw-bold font-monospace text-title " ] [ text "To-Do List" ]
         , div [] []
-        , h1 [] [ text (String.fromInt (Time.posixToMillis model.time)) ]
+        -- , h1 [] [ text (String.fromInt (Time.posixToMillis model.time)) ]
         , div [ class "d-flex justify-content-center align-items-center" ]
             [ div [ class "d-flex mb-3" ]
                 [ input [ class "form-control me-3", placeholder "Write something", value model.userInput, onInput Change ] []
