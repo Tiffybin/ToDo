@@ -23,7 +23,7 @@
 	<script src="main.js"></script>
 	<script>
 		var app = Elm.Main.init({
-			flags: localStorage.getItem("saved"),
+			flags: localStorage.getItem("saved") || "",
 			node: document.getElementById("elm-app-is-loaded-here")
 		});      
 		app.ports.save.subscribe(function(message) {
