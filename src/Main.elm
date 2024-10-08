@@ -2,7 +2,7 @@ port module Main exposing (..)
 
 import Browser
 import Html exposing (..)
-import Html.Attributes exposing (attribute, class, for, id, name, placeholder, tabindex, type_, value)
+import Html.Attributes exposing (attribute, checked, class, for, id, name, placeholder, tabindex, type_, value)
 import Html.Events exposing (onClick, onInput)
 import Html5.DragDrop
 import Iso8601 as Iso
@@ -45,7 +45,19 @@ type alias DropId =
 
 
 type alias Bullet =
-    { title : String, time : Time.Posix }
+    { title : String, time : Time.Posix, timeOfDay : Maybe TimeOfDay, progress : Maybe Status }
+
+
+type TimeOfDay
+    = Morning
+    | Evening
+    | Afternoon
+
+
+type Status
+    = Completed
+    | NotStarted
+    | InProgress
 
 
 type Msg
@@ -57,6 +69,8 @@ type Msg
     | DragDropMsg (Html5.DragDrop.Msg DragId DropId)
     | Time Int Time.Posix
     | IntialZone Time.Zone
+    | UpdateTimeOfDay Int TimeOfDay
+    | Progress Int Status
 
 
 remove : Int -> List Bullet -> List Bullet
@@ -73,7 +87,7 @@ update msg model =
                     ( { model | items = remove i model.items }, Cmd.none )
 
                 AddAfter psx ->
-                    ( { model | items = { title = model.userInput, time = psx } :: model.items }, Cmd.none )
+                    ( { model | items = { title = model.userInput, time = psx, timeOfDay = Maybe.Nothing, progress = Maybe.Nothing } :: model.items }, Cmd.none )
 
                 AddBefore ->
                     ( model, getTime )
@@ -108,10 +122,26 @@ update msg model =
                 IntialZone zn ->
                     ( { model | zone = Just zn }, Cmd.none )
 
+                UpdateTimeOfDay i timeOfDay ->
+                    ( { model | items = List.Extra.updateAt i (updateTimeOfDay (Just timeOfDay)) model.items }, Cmd.none )
+
+                Progress i status ->
+                    ( { model | items = List.Extra.updateAt i (updateProgress (Just status)) model.items }, Cmd.none )
+
         x =
             Debug.log "logging this" (Json.Encode.encode 0 (encoder newModel.items))
     in
     ( newModel, Cmd.batch [ save x, cmd ] )
+
+
+updateProgress : Maybe Status -> Bullet -> Bullet
+updateProgress status b =
+    { b | progress = status }
+
+
+updateTimeOfDay : Maybe TimeOfDay -> Bullet -> Bullet
+updateTimeOfDay t b =
+    { b | timeOfDay = t }
 
 
 updateTime : Time.Posix -> Bullet -> Bullet
@@ -203,31 +233,13 @@ viewModal model i b =
                                 ]
                             ]
                         , div [] [ text "Time" ]
-                        , div [ class "form-check" ]
-                            [ label [ class "form-check-label", for "radio1" ] [ text "Morning" ]
-                            , input [ class "form-check-input", type_ "radio", name "radio", id "radio1" ] []
-                            ]
-                        , div [ class "form-check" ]
-                            [ label [ class "form-check-label", for "radio2" ] [ text "Afternoon" ]
-                            , input [ class "form-check-input", type_ "radio", name "radio", id "radio2" ] []
-                            ]
-                        , div [ class "form-check" ]
-                            [ label [ class "form-check-label", for "radio3" ] [ text "Evening" ]
-                            , input [ class "form-check-input", type_ "radio", name "radio", id "radio3" ] []
-                            ]
+                        , checkTime b i "Morning" Morning
+                        , checkTime b i "Afternoon" Afternoon
+                        , checkTime b i "Evening" Evening
                         , div [] [ text "Progress" ]
-                        , div [ class "form-check" ]
-                            [ label [ class "form-check-label", for "progress1" ] [ text "Not Started" ]
-                            , input [ class "form-check-input", type_ "radio", name "progress", id "progress1" ] []
-                            ]
-                        , div [ class "form-check" ]
-                            [ label [ class "form-check-label", for "progress2" ] [ text "In Progress" ]
-                            , input [ class "form-check-input", type_ "radio", name "progress", id "progress2" ] []
-                            ]
-                        , div [ class "form-check" ]
-                            [ label [ class "form-check-label", for "progress3" ] [ text "Completed" ]
-                            , input [ class "form-check-input", type_ "radio", name "progress", id "progress3" ] []
-                            ]
+                        , checkStatus b i "Completed" Completed
+                        , checkStatus b i "In Progress" InProgress
+                        , checkStatus b i "Not Started" NotStarted
                         , div [ class "modal-footer" ]
                             [ button [ type_ "button", class "btn btn-secondary", attribute "data-bs-dismiss" "modal" ] [ text "Close" ]
                             , button [ type_ "button", class "btn button" ] [ text "Save changes" ]
@@ -238,6 +250,40 @@ viewModal model i b =
 
         Nothing ->
             text "No zone"
+
+
+checkTime : Bullet -> Int -> String -> TimeOfDay -> Html Msg
+checkTime b i str timeOfDay =
+    div [ class "form-check" ]
+        [ label [ class "form-check-label", for str ] [ text str ]
+        , input
+            [ checked
+                (b.timeOfDay == Just timeOfDay)
+            , onClick (UpdateTimeOfDay i timeOfDay)
+            , class "form-check-input"
+            , type_ "radio"
+            , name "radio"
+            , id str
+            ]
+            []
+        ]
+
+
+checkStatus : Bullet -> Int -> String -> Status -> Html Msg
+checkStatus b i str status =
+    div [ class "form-check" ]
+        [ label [ class "form-check-label", for str ] [ text str ]
+        , input
+            [ checked
+                (b.progress == Just status)
+            , onClick (Progress i status)
+            , class "form-check-input"
+            , type_ "radio"
+            , name "radio"
+            , id str
+            ]
+            []
+        ]
 
 
 moveId : DragId -> DropId -> List a -> List a
@@ -309,7 +355,51 @@ encoder items =
 
 encodeBullet : Bullet -> Json.Encode.Value
 encodeBullet b =
-    Json.Encode.object [ ( "input", Json.Encode.string b.title ), ( "time", Iso.encode b.time ) ]
+    Json.Encode.object [ ( "input", Json.Encode.string b.title ), ( "time", Iso.encode b.time ), ( "timeOfDay", encodeTimeOfDay b.timeOfDay ), ( "progress", encodeStatus b.progress ) ]
+
+
+encodeStatus : Maybe Status -> Json.Encode.Value
+encodeStatus status =
+    case status of
+        Just aStatus ->
+            let
+                stat =
+                    case aStatus of
+                        Completed ->
+                            "Completed"
+
+                        InProgress ->
+                            "In Progress"
+
+                        NotStarted ->
+                            "Not Started"
+            in
+            Json.Encode.string stat
+
+        Nothing ->
+            Json.Encode.null
+
+
+encodeTimeOfDay : Maybe TimeOfDay -> Json.Encode.Value
+encodeTimeOfDay t =
+    case t of
+        Just time ->
+            let
+                to =
+                    case time of
+                        Morning ->
+                            "Morning"
+
+                        Afternoon ->
+                            "Afternoon"
+
+                        Evening ->
+                            "Evening"
+            in
+            Json.Encode.string to
+
+        Nothing ->
+            Json.Encode.null
 
 
 port save : String -> Cmd msg
@@ -332,6 +422,31 @@ decodeListBullets =
 
 decodeBullet : Decode.Decoder Bullet
 decodeBullet =
-    Decode.map2 Bullet
+    Decode.map4 Bullet
         (Decode.field "input" Decode.string)
         (Decode.field "time" Iso.decoder)
+        (Decode.field "timeOfDay" (Decode.maybe decodeTimeOfDay))
+        (Decode.field "progress" (Decode.maybe decodeStatus))
+
+
+decodeTimeOfDay : Decode.Decoder TimeOfDay
+decodeTimeOfDay =
+    Decode.oneOf [ decoderExactString "Morning" Morning, decoderExactString "Afternoon" Afternoon, decoderExactString "Evening" Evening ]
+
+
+decodeStatus : Decode.Decoder Status
+decodeStatus =
+    Decode.oneOf [ decoderExactString "Completed" Completed, decoderExactString "In Progress" InProgress, decoderExactString "Not Started" NotStarted ]
+
+
+decoderExactString : String -> b -> Decode.Decoder b
+decoderExactString expected t =
+    Decode.andThen
+        (\actual ->
+            if actual == expected then
+                Decode.succeed t
+
+            else
+                Decode.fail "doesn't match"
+        )
+        Decode.string
