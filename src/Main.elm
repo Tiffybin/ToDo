@@ -1,6 +1,11 @@
 port module Main exposing (..)
 
 import Browser
+import Dict
+import Environment
+import Firestore
+import Firestore.Codec as Codec
+import Firestore.Types.Reference as Reference
 import Html exposing (..)
 import Html.Attributes exposing (attribute, checked, class, for, id, name, placeholder, tabindex, type_, value)
 import Html.Events exposing (onClick, onInput)
@@ -33,6 +38,20 @@ type alias Model =
     , userInput : String
     , dragDrop : Html5.DragDrop.Model DragId DropId
     , zone : Maybe Time.Zone
+
+    -- , firestore : Firestore.Firestore
+    -- , document : Maybe (Firestore.Document Document)
+    }
+
+
+type alias Document =
+    { reference : Reference.Reference
+    , integer : Int
+    , string : String
+    , list : List String
+    , map : Dict.Dict String String
+    , boolean : Bool
+    , nullable : Maybe String
     }
 
 
@@ -45,7 +64,12 @@ type alias DropId =
 
 
 type alias Bullet =
-    { title : String, time : Time.Posix, timeOfDay : Maybe TimeOfDay, progress : Maybe Status }
+    { title : String
+    , time : Time.Posix
+    , timeOfDay : Maybe TimeOfDay
+    , progress : Maybe Status
+    , checked : Bool
+    }
 
 
 type TimeOfDay
@@ -71,6 +95,7 @@ type Msg
     | IntialZone Time.Zone
     | UpdateTimeOfDay Int TimeOfDay
     | Progress Int Status
+    | CheckedOff Int Bool
 
 
 remove : Int -> List Bullet -> List Bullet
@@ -87,7 +112,7 @@ update msg model =
                     ( { model | items = remove i model.items }, Cmd.none )
 
                 AddAfter psx ->
-                    ( { model | items = { title = model.userInput, time = psx, timeOfDay = Maybe.Nothing, progress = Maybe.Nothing } :: model.items }, Cmd.none )
+                    ( { model | items = { title = model.userInput, time = psx, timeOfDay = Maybe.Nothing, progress = Maybe.Nothing, checked = False } :: model.items }, Cmd.none )
 
                 AddBefore ->
                     ( model, getTime )
@@ -128,10 +153,18 @@ update msg model =
                 Progress i status ->
                     ( { model | items = List.Extra.updateAt i (updateProgress (Just status)) model.items }, Cmd.none )
 
+                CheckedOff i bool ->
+                    ( { model | items = List.Extra.updateAt i (updateCheckedOff bool) model.items }, Cmd.none )
+
         x =
             Debug.log "logging this" (Json.Encode.encode 0 (encoder newModel.items))
     in
     ( newModel, Cmd.batch [ save x, cmd ] )
+
+
+updateCheckedOff : Bool -> Bullet -> Bullet
+updateCheckedOff bool b =
+    { b | checked = bool }
 
 
 updateProgress : Maybe Status -> Bullet -> Bullet
@@ -337,15 +370,23 @@ viewBullet i model =
         Just bullet ->
             div (Html5.DragDrop.draggable DragDropMsg i)
                 [ li []
-                    [ input [ value bullet.title, onInput (Edit i) ] []
-                    , button [ class "btn button-small", onClick (Delete i) ] [ text "-" ]
-                    , button [ class "btn button-small", type_ "button", attribute "data-bs-toggle" "modal", attribute "data-bs-target" ("#" ++ getModalId i) ] [ text "i" ]
-                    , viewModal model i bullet
+                    [ div [ class "d-flex justify-content-between align-items-center" ]
+                        [ div [ class "form-check me-2" ]
+                            [ input [ class "form-check-input", type_ "checkbox", value "", id "unchecked" ] []
+                            , label [ class "form-check-label", for "unchecked" ] []
+                            ]
+                        , input [ value bullet.title, onInput (Edit i) ] []
+                        , div []
+                            [ button [ class "btn button-small", onClick (Delete i) ] [ text "-" ]
+                            , button [ class "btn button-small", type_ "button", attribute "data-bs-toggle" "modal", attribute "data-bs-target" ("#" ++ getModalId i) ] [ text "i" ]
+                            , viewModal model i bullet
+                            ]
+                        ]
                     ]
                 ]
 
         Nothing ->
-            text "No Bullet"
+            text "No bullet"
 
 
 encoder : List Bullet -> Json.Encode.Value
@@ -355,24 +396,16 @@ encoder items =
 
 encodeBullet : Bullet -> Json.Encode.Value
 encodeBullet b =
-    Json.Encode.object [ ( "input", Json.Encode.string b.title ), ( "time", Iso.encode b.time ), ( "timeOfDay", encodeTimeOfDay b.timeOfDay ), ( "progress", encodeStatus b.progress ) ]
+    Json.Encode.object [ ( "input", Json.Encode.string b.title ), ( "time", Iso.encode b.time ), ( "timeOfDay", encodeTimeOfDayToJson b.timeOfDay ), ( "progress", encodeStatusToJson b.progress ), ( "checked", Json.Encode.bool b.checked ) ]
 
 
-encodeStatus : Maybe Status -> Json.Encode.Value
-encodeStatus status =
+encodeStatusToJson : Maybe Status -> Json.Encode.Value
+encodeStatusToJson status =
     case status of
         Just aStatus ->
             let
                 stat =
-                    case aStatus of
-                        Completed ->
-                            "Completed"
-
-                        InProgress ->
-                            "In Progress"
-
-                        NotStarted ->
-                            "Not Started"
+                    encodeStatus aStatus
             in
             Json.Encode.string stat
 
@@ -380,26 +413,44 @@ encodeStatus status =
             Json.Encode.null
 
 
-encodeTimeOfDay : Maybe TimeOfDay -> Json.Encode.Value
-encodeTimeOfDay t =
+encodeStatus : Status -> String
+encodeStatus s =
+    case s of
+        Completed ->
+            "Completed"
+
+        InProgress ->
+            "In Progress"
+
+        NotStarted ->
+            "Not Started"
+
+
+encodeTimeOfDayToJson : Maybe TimeOfDay -> Json.Encode.Value
+encodeTimeOfDayToJson t =
     case t of
         Just time ->
             let
                 to =
-                    case time of
-                        Morning ->
-                            "Morning"
-
-                        Afternoon ->
-                            "Afternoon"
-
-                        Evening ->
-                            "Evening"
+                    encodeTimeOfDay time
             in
             Json.Encode.string to
 
         Nothing ->
             Json.Encode.null
+
+
+encodeTimeOfDay : TimeOfDay -> String
+encodeTimeOfDay t =
+    case t of
+        Morning ->
+            "Morning"
+
+        Afternoon ->
+            "Afternoon"
+
+        Evening ->
+            "Evening"
 
 
 port save : String -> Cmd msg
@@ -422,11 +473,12 @@ decodeListBullets =
 
 decodeBullet : Decode.Decoder Bullet
 decodeBullet =
-    Decode.map4 Bullet
+    Decode.map5 Bullet
         (Decode.field "input" Decode.string)
         (Decode.field "time" Iso.decoder)
         (Decode.field "timeOfDay" (Decode.maybe decodeTimeOfDay))
         (Decode.field "progress" (Decode.maybe decodeStatus))
+        (Decode.field "checked" Decode.bool)
 
 
 decodeTimeOfDay : Decode.Decoder TimeOfDay
@@ -441,12 +493,89 @@ decodeStatus =
 
 decoderExactString : String -> b -> Decode.Decoder b
 decoderExactString expected t =
-    Decode.andThen
-        (\actual ->
-            if actual == expected then
-                Decode.succeed t
+    Decode.string
+        |> Decode.andThen
+            (\actual ->
+                if actual == expected then
+                    Decode.succeed t
 
-            else
-                Decode.fail "doesn't match"
-        )
-        Decode.string
+                else
+                    Decode.fail "doesn't match"
+            )
+
+
+codecBullet : Codec.Codec Bullet
+codecBullet =
+    Codec.document Bullet
+        |> Codec.required "title" .title Codec.string
+        |> Codec.required "time" .time Codec.timestamp
+        |> Codec.required "timeOfDay" .timeOfDay (Codec.maybe codecTime)
+        |> Codec.required "progress" .progress (Codec.maybe codecStatus)
+        |> Codec.required "checked" .checked Codec.bool
+        |> Codec.build
+
+
+codecTime : Codec.Field TimeOfDay
+codecTime =
+    codecOneOf
+        encodeTimeOfDay
+        Codec.string
+        [ ( "Morning", Morning )
+        , ( "Afternoon", Afternoon )
+        , ( "Evening", Evening )
+        ]
+
+
+codecStatus : Codec.Field Status
+codecStatus =
+    codecOneOf
+        encodeStatus
+        Codec.string
+        [ ( "Completed", Completed )
+        , ( "In Progress", InProgress )
+        , ( "Not Started", NotStarted )
+        ]
+
+
+
+-- codecExactString : String -> TimeOfDay -> Codec.Field TimeOfDay
+-- codecExactString expected t =
+--     Codec.string
+--         |> Codec.andThen
+--             (\actual ->
+--                 if actual == expected then
+--                     Codec.succeed t
+--                 else
+--                     Codec.fail "failed"
+--             )
+--             encodeTimeOfDay
+-- codecExactString : String -> TimeOfDay
+-- codecExactString expected t =
+--     Codec.string
+--         |> Codec.andThen
+--             (\actual ->
+--                 if actual == expected then
+--                     Codec.succeed t
+--                 else
+--                     Codec.fail "failed"
+--             )
+--             -- encodeTimeOfDay
+--             -- --Time-String
+
+
+codecOneOf : (a -> b) -> Codec.Field b -> List ( b, a ) -> Codec.Field a
+codecOneOf show codec =
+    let
+        tryCodec ( expected, wouldProduce ) restCodec =
+            codec
+                |> Codec.andThen
+                    (\actual ->
+                        if expected == actual then
+                            Codec.succeed wouldProduce
+
+                        else
+                            restCodec
+                    )
+                    show
+    in
+    List.foldr tryCodec (Codec.fail "None matched")
