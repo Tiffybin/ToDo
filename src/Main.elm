@@ -132,7 +132,7 @@ remove i list =
 
 subscriptions : Sub Msg
 subscriptions =
-    Time.every 2000 (always GetFromDB)
+    Time.every 1000 (always GetFromDB)
 
 
 getFromDb : Firestore.Firestore -> Cmd Msg
