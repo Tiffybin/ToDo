@@ -5,6 +5,8 @@ import Dict
 import Environment
 import Firestore
 import Firestore.Codec as Codec
+import Firestore.Config
+import Firestore.Options.List
 import Firestore.Types.Reference as Reference
 import Html exposing (..)
 import Html.Attributes exposing (attribute, checked, class, for, id, name, placeholder, tabindex, type_, value)
@@ -22,7 +24,7 @@ main : Program String Model Msg
 main =
     Browser.element
         { init = init
-        , subscriptions = \_ -> Sub.none
+        , subscriptions = \_ -> subscriptions
         , update = update
         , view = view
         }
@@ -30,7 +32,30 @@ main =
 
 init : String -> ( Model, Cmd Msg )
 init s =
-    ( { items = decoder s, userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing }, getZone )
+    let
+        firestore =
+            Firestore.Config.new
+                { apiKey = Environment.apiKey
+                , project = Environment.projectId
+                }
+                |> Firestore.init
+    in
+    ( { items = decoder s, userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore }
+    , Cmd.batch
+        [ getZone
+        , getFromDb firestore
+        ]
+    )
+
+
+toTask : Result error a -> Task.Task error a
+toTask result =
+    case result of
+        Err r ->
+            Task.fail r
+
+        Ok r ->
+            Task.succeed r
 
 
 type alias Model =
@@ -38,9 +63,7 @@ type alias Model =
     , userInput : String
     , dragDrop : Html5.DragDrop.Model DragId DropId
     , zone : Maybe Time.Zone
-
-    -- , firestore : Firestore.Firestore
-    -- , document : Maybe (Firestore.Document Document)
+    , firestore : Firestore.Firestore
     }
 
 
@@ -96,11 +119,31 @@ type Msg
     | UpdateTimeOfDay Int TimeOfDay
     | Progress Int Status
     | CheckedOff Int Bool
+    | Get (Result Firestore.Error (Firestore.Documents Bullet))
+    | Upsert (Result Firestore.Error (Firestore.Document Bullet))
+    | DeleteFromDB (Result Firestore.Error ())
+    | GetFromDB
 
 
 remove : Int -> List Bullet -> List Bullet
 remove i list =
     List.Extra.removeAt i list
+
+
+subscriptions : Sub Msg
+subscriptions =
+    Time.every 2000 (always GetFromDB)
+
+
+getFromDb : Firestore.Firestore -> Cmd Msg
+getFromDb firestore =
+    firestore
+        |> Firestore.root
+        |> Firestore.collection "Bullets"
+        |> Firestore.build
+        |> toTask
+        |> Task.andThen (Firestore.list (Codec.asDecoder codecBullet) Firestore.Options.List.default)
+        |> Task.attempt Get
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -109,10 +152,34 @@ update msg model =
         ( newModel, cmd ) =
             case msg of
                 Delete i ->
-                    ( { model | items = remove i model.items }, Cmd.none )
+                    let
+                        bullet =
+                            List.Extra.getAt i model.items
+                    in
+                    case bullet of
+                        Just b ->
+                            ( { model | items = remove i model.items }, deleteBullet model.firestore b )
+
+                        Nothing ->
+                            ( { model | items = remove i model.items }, Cmd.none )
 
                 AddAfter psx ->
-                    ( { model | items = { title = model.userInput, time = psx, timeOfDay = Maybe.Nothing, progress = Maybe.Nothing, checked = False } :: model.items }, Cmd.none )
+                    let
+                        bullet =
+                            { title = model.userInput
+                            , time = psx
+                            , timeOfDay = Maybe.Nothing
+                            , progress = Maybe.Nothing
+                            , checked = False
+                            }
+                    in
+                    ( { model
+                        | items =
+                            bullet :: model.items
+                      }
+                    , upsertBullet model.firestore
+                        bullet
+                    )
 
                 AddBefore ->
                     ( model, getTime )
@@ -120,8 +187,12 @@ update msg model =
                 Change userI ->
                     ( { model | userInput = userI }, Cmd.none )
 
-                Edit i newS ->
-                    ( { model | items = List.Extra.updateAt i (editBullet newS) model.items }, Cmd.none )
+                Edit i newString ->
+                    let
+                        editString =
+                            updated model.items model.firestore i (editBullet newString)
+                    in
+                    ( { model | items = Tuple.first editString }, Tuple.second editString )
 
                 DragDropMsg dragDrop ->
                     let
@@ -141,25 +212,139 @@ update msg model =
                     , Cmd.none
                     )
 
-                Time i psx ->
-                    ( { model | items = List.Extra.updateAt i (updateTime psx) model.items }, Cmd.none )
+                Time i timePosix ->
+                    let
+                        editTimePosix =
+                            updated model.items model.firestore i (updateTime timePosix)
+                    in
+                    ( { model | items = Tuple.first editTimePosix }, Tuple.second editTimePosix )
 
                 IntialZone zn ->
                     ( { model | zone = Just zn }, Cmd.none )
 
                 UpdateTimeOfDay i timeOfDay ->
-                    ( { model | items = List.Extra.updateAt i (updateTimeOfDay (Just timeOfDay)) model.items }, Cmd.none )
+                    let
+                        editTimeOfDay =
+                            updated model.items model.firestore i (updateTimeOfDay (Just timeOfDay))
+                    in
+                    ( { model | items = Tuple.first editTimeOfDay }, Tuple.second editTimeOfDay )
 
                 Progress i status ->
-                    ( { model | items = List.Extra.updateAt i (updateProgress (Just status)) model.items }, Cmd.none )
+                    let
+                        editStatus =
+                            updated model.items model.firestore i (updateProgress (Just status))
+                    in
+                    ( { model | items = Tuple.first editStatus }, Tuple.second editStatus )
 
-                CheckedOff i bool ->
-                    ( { model | items = List.Extra.updateAt i (updateCheckedOff bool) model.items }, Cmd.none )
+                CheckedOff i checked ->
+                    let
+                        editChecked =
+                            updated model.items model.firestore i (updateCheckedOff checked)
+                    in
+                    ( { model | items = Tuple.first editChecked }, Tuple.second editChecked )
+
+                Get result ->
+                    ( { model
+                        | items =
+                            case result of
+                                Err _ ->
+                                    let
+                                        _ =
+                                            Debug.log "nothing there"
+                                    in
+                                    []
+
+                                Ok r ->
+                                    List.map .fields r.documents
+                      }
+                    , Cmd.none
+                    )
+
+                Upsert result ->
+                    case result of
+                        Err error ->
+                            let
+                                _ =
+                                    Debug.log "upsert failed" error
+                            in
+                            ( { model | items = model.items }, Cmd.none )
+
+                        Ok _ ->
+                            ( { model | items = model.items }, Cmd.none )
+
+                DeleteFromDB result ->
+                    case result of
+                        Err error ->
+                            let
+                                _ =
+                                    Debug.log "upsert failed" error
+                            in
+                            ( { model | items = model.items }, Cmd.none )
+
+                        Ok _ ->
+                            ( { model | items = model.items }, Cmd.none )
+
+                GetFromDB ->
+                    ( model, getFromDb model.firestore )
 
         x =
             Debug.log "logging this" (Json.Encode.encode 0 (encoder newModel.items))
     in
     ( newModel, Cmd.batch [ save x, cmd ] )
+
+
+updated : List Bullet -> Firestore.Firestore -> Int -> (Bullet -> Bullet) -> ( List Bullet, Cmd Msg )
+updated lst fs i func =
+    let
+        newItems =
+            List.Extra.updateAt i func lst
+    in
+    ( newItems
+    , case
+        List.Extra.getAt i newItems
+      of
+        Just bullet ->
+            upsertBullet fs bullet
+
+        Nothing ->
+            Cmd.none
+    )
+
+
+upsertBullet : Firestore.Firestore -> Bullet -> Cmd Msg
+upsertBullet f b =
+    let
+        time =
+            Iso.fromTime b.time
+    in
+    f
+        |> Firestore.root
+        -- |> Firestore.collection "Username"
+        -- |> Firestore.document "Tiff"
+        -- |> Firestore.subCollection "bullets/"
+        -- |> Firestore.document b.title
+        |> Firestore.collection "Bullets"
+        |> Firestore.document time
+        |> Firestore.build
+        |> toTask
+        |> Task.andThen (Firestore.upsert (Codec.asDecoder codecBullet) (Codec.asEncoder codecBullet b))
+        |> Task.attempt Upsert
+
+
+deleteBullet : Firestore.Firestore -> Bullet -> Cmd Msg
+deleteBullet firestore bullet =
+    let
+        time =
+            Iso.fromTime bullet.time
+    in
+    firestore
+        |> Firestore.root
+        |> Firestore.collection "Bullets"
+        |> Firestore.document time
+        |> Firestore.build
+        |> toTask
+        |> Task.andThen Firestore.delete
+        |> Task.attempt DeleteFromDB
 
 
 updateCheckedOff : Bool -> Bullet -> Bullet
@@ -372,8 +557,12 @@ viewBullet i model =
                 [ li []
                     [ div [ class "d-flex justify-content-between align-items-center" ]
                         [ div [ class "form-check me-2" ]
-                            [ input [ class "form-check-input", type_ "checkbox", value "", id "unchecked" ] []
-                            , label [ class "form-check-label", for "unchecked" ] []
+                            [ checkedBullet
+                                bullet
+                                i
+
+                            -- input [ class "form-check-input", type_ "checkbox", value "", id "unchecked" ] []
+                            -- , label [ class "form-check-label", for "unchecked" ] []
                             ]
                         , input [ value bullet.title, onInput (Edit i) ] []
                         , div []
@@ -387,6 +576,23 @@ viewBullet i model =
 
         Nothing ->
             text "No bullet"
+
+
+checkedBullet : Bullet -> Int -> Html Msg
+checkedBullet bullet index =
+    div [ class "form-check me-2" ]
+        [ label [ class "form-check-label", for "flexCheckChecked" ] []
+        , input
+            [ checked
+                bullet.checked
+            , onClick (CheckedOff index (not bullet.checked))
+            , class "form-check-input"
+            , type_ "checkbox"
+            , value ""
+            , id "flexCheckChecked"
+            ]
+            []
+        ]
 
 
 encoder : List Bullet -> Json.Encode.Value
@@ -535,32 +741,6 @@ codecStatus =
         , ( "In Progress", InProgress )
         , ( "Not Started", NotStarted )
         ]
-
-
-
--- codecExactString : String -> TimeOfDay -> Codec.Field TimeOfDay
--- codecExactString expected t =
---     Codec.string
---         |> Codec.andThen
---             (\actual ->
---                 if actual == expected then
---                     Codec.succeed t
---                 else
---                     Codec.fail "failed"
---             )
---             encodeTimeOfDay
--- codecExactString : String -> TimeOfDay
--- codecExactString expected t =
---     Codec.string
---         |> Codec.andThen
---             (\actual ->
---                 if actual == expected then
---                     Codec.succeed t
---                 else
---                     Codec.fail "failed"
---             )
---             -- encodeTimeOfDay
---             -- --Time-String
 
 
 codecOneOf : (a -> b) -> Codec.Field b -> List ( b, a ) -> Codec.Field a
