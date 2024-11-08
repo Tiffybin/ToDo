@@ -10,7 +10,7 @@ import Firestore.Options.List
 import Firestore.Types.Reference as Reference
 import Html exposing (..)
 import Html.Attributes exposing (attribute, checked, class, for, id, name, placeholder, tabindex, type_, value)
-import Html.Events exposing (onClick, onInput)
+import Html.Events exposing (onBlur, onClick, onFocus, onInput)
 import Html5.DragDrop
 import Iso8601 as Iso
 import Json.Decode as Decode
@@ -40,7 +40,13 @@ init s =
                 }
                 |> Firestore.init
     in
-    ( { items = decoder s, userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore }
+    ( { items = decoder s
+      , userInput = ""
+      , dragDrop = Html5.DragDrop.init
+      , zone = Maybe.Nothing
+      , firestore = firestore
+      , editingIndex = Nothing
+      }
     , Cmd.batch
         [ getZone
         , getFromDb firestore
@@ -64,6 +70,7 @@ type alias Model =
     , dragDrop : Html5.DragDrop.Model DragId DropId
     , zone : Maybe Time.Zone
     , firestore : Firestore.Firestore
+    , editingIndex : Maybe Int
     }
 
 
@@ -123,6 +130,7 @@ type Msg
     | Upsert (Result Firestore.Error (Firestore.Document Bullet))
     | DeleteFromDB (Result Firestore.Error ())
     | GetFromDB
+    | NowEditing (Maybe Int)
 
 
 remove : Int -> List Bullet -> List Bullet
@@ -132,7 +140,7 @@ remove i list =
 
 subscriptions : Sub Msg
 subscriptions =
-    Time.every 2000 (always GetFromDB)
+    Time.every 200 (always GetFromDB)
 
 
 getFromDb : Firestore.Firestore -> Cmd Msg
@@ -255,7 +263,25 @@ update msg model =
                                     []
 
                                 Ok r ->
-                                    List.map .fields r.documents
+                                    let
+                                        fetchedItems =
+                                            List.map .fields r.documents
+                                    in
+                                    case model.editingIndex of
+                                        Nothing ->
+                                            fetchedItems
+
+                                        Just indexToSkip ->
+                                            let
+                                                originalSkippedItem =
+                                                    List.Extra.getAt indexToSkip model.items
+                                            in
+                                            case originalSkippedItem of
+                                                Nothing ->
+                                                    fetchedItems
+
+                                                Just keptItem ->
+                                                    List.Extra.updateAt indexToSkip (\_ -> keptItem) fetchedItems
                       }
                     , Cmd.none
                     )
@@ -286,6 +312,9 @@ update msg model =
 
                 GetFromDB ->
                     ( model, getFromDb model.firestore )
+
+                NowEditing newIndex ->
+                    ( { model | editingIndex = newIndex }, Cmd.none )
 
         x =
             Debug.log "logging this" (Json.Encode.encode 0 (encoder newModel.items))
@@ -439,7 +468,7 @@ viewModal model i b =
                     [ div [ class "modal-content" ]
                         [ div [ class "modal-header" ]
                             [ h3 [ class "modal-title" ] [ text ("Additional Details for " ++ b.title) ]
-                            , button [ type_ "button", class "btn-close", attribute "data-bs-dismiss" "modal", attribute "aria-label" "Close" ] []
+                            , button [ onClick (NowEditing Nothing), type_ "button", class "btn-close", attribute "data-bs-dismiss" "modal", attribute "aria-label" "Close" ] []
                             ]
                         , div [ class "modal-body" ]
                             [ Html.form []
@@ -459,8 +488,7 @@ viewModal model i b =
                         , checkStatus b i "In Progress" InProgress
                         , checkStatus b i "Not Started" NotStarted
                         , div [ class "modal-footer" ]
-                            [ button [ type_ "button", class "btn btn-secondary", attribute "data-bs-dismiss" "modal" ] [ text "Close" ]
-                            , button [ type_ "button", class "btn button" ] [ text "Save changes" ]
+                            [ button [ onClick (NowEditing Nothing), type_ "button", class "btn btn-secondary", attribute "data-bs-dismiss" "modal" ] [ text "Close" ]
                             ]
                         ]
                     ]
@@ -564,10 +592,10 @@ viewBullet i model =
                             -- input [ class "form-check-input", type_ "checkbox", value "", id "unchecked" ] []
                             -- , label [ class "form-check-label", for "unchecked" ] []
                             ]
-                        , input [ value bullet.title, onInput (Edit i) ] []
+                        , input [ id ("title" ++ String.fromInt i), value bullet.title, onInput (Edit i), onFocus (NowEditing (Just i)), onBlur (NowEditing Nothing) ] []
                         , div []
                             [ button [ class "btn button-small", onClick (Delete i) ] [ text "-" ]
-                            , button [ class "btn button-small", type_ "button", attribute "data-bs-toggle" "modal", attribute "data-bs-target" ("#" ++ getModalId i) ] [ text "i" ]
+                            , button [ onClick (NowEditing (Just i)), class "btn button-small", type_ "button", attribute "data-bs-toggle" "modal", attribute "data-bs-target" ("#" ++ getModalId i) ] [ text "i" ]
                             , viewModal model i bullet
                             ]
                         ]
