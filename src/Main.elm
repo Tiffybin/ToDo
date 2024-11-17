@@ -10,7 +10,7 @@ import Firestore.Options.List
 import Firestore.Types.Reference as Reference
 import Html exposing (..)
 import Html.Attributes exposing (attribute, checked, class, for, id, name, placeholder, tabindex, type_, value)
-import Html.Events exposing (onClick, onInput)
+import Html.Events exposing (onBlur, onClick, onFocus, onInput)
 import Html5.DragDrop
 import Iso8601 as Iso
 import Json.Decode as Decode
@@ -24,7 +24,7 @@ main : Program String Model Msg
 main =
     Browser.element
         { init = init
-        , subscriptions = \_ -> subscriptions
+        , subscriptions = subscriptions
         , update = update
         , view = view
         }
@@ -40,7 +40,7 @@ init s =
                 }
                 |> Firestore.init
     in
-    ( { items = decoder s, userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore }
+    ( { items = decoder s, userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing }
     , Cmd.batch
         [ getZone
         , getFromDb firestore
@@ -64,6 +64,8 @@ type alias Model =
     , dragDrop : Html5.DragDrop.Model DragId DropId
     , zone : Maybe Time.Zone
     , firestore : Firestore.Firestore
+    , searchedString : String
+    , index : Maybe Int
     }
 
 
@@ -123,6 +125,9 @@ type Msg
     | Upsert (Result Firestore.Error (Firestore.Document Bullet))
     | DeleteFromDB (Result Firestore.Error ())
     | GetFromDB
+    | SearchAndRemoved String
+    | Search String
+    | UpdateIndex (Maybe Int)
 
 
 remove : Int -> List Bullet -> List Bullet
@@ -130,9 +135,13 @@ remove i list =
     List.Extra.removeAt i list
 
 
-subscriptions : Sub Msg
-subscriptions =
-    Time.every 1000 (always GetFromDB)
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    if model.searchedString == "" then
+        Time.every 2000 (always GetFromDB)
+
+    else
+        Sub.none
 
 
 getFromDb : Firestore.Firestore -> Cmd Msg
@@ -287,10 +296,52 @@ update msg model =
                 GetFromDB ->
                     ( model, getFromDb model.firestore )
 
+                SearchAndRemoved userInput ->
+                    ( { model | items = removeEverythingButsearched userInput (List.map identity model.items) }
+                    , if userInput == "" then
+                        getFromDb model.firestore
+
+                      else
+                        Cmd.none
+                    )
+
+                Search userInput ->
+                    ( { model | searchedString = userInput }, Cmd.none )
+
+                UpdateIndex indx ->
+                    case indx of
+                        Just id ->
+                            ( { model | index = Just id }, everythingButFocused model.firestore id model.index )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
         x =
             Debug.log "logging this" (Json.Encode.encode 0 (encoder newModel.items))
     in
     ( newModel, Cmd.batch [ save x, cmd ] )
+
+
+everythingButFocused : Firestore.Firestore -> Int -> Maybe Int -> Cmd Msg
+everythingButFocused fs i index =
+    case index of
+        Just indx ->
+            if indx /= i then
+                getFromDb fs
+
+            else
+                Cmd.none
+
+        Nothing ->
+            Cmd.none
+
+
+
+
+
+removeEverythingButsearched : String -> List Bullet -> List Bullet
+removeEverythingButsearched userString list =
+    List.filter (\bullet -> String.contains userString bullet.title) list
 
 
 updated : List Bullet -> Firestore.Firestore -> Int -> (Bullet -> Bullet) -> ( List Bullet, Cmd Msg )
@@ -391,6 +442,8 @@ view model =
             [ div [ class "d-flex mb-3" ]
                 [ input [ class "form-control me-3", placeholder "Write something", value model.userInput, onInput Change ] []
                 , button [ class "btn button", onClick AddBefore ] [ text "+" ]
+                , button [ class "btn button", onClick (SearchAndRemoved model.searchedString) ] [ text "Q" ]
+                , input [ class "form-control me-3", placeholder "Search", value model.searchedString, onInput Search ] []
                 ]
             ]
         , div [ class "d-flex justify-content-center" ]
@@ -439,7 +492,7 @@ viewModal model i b =
                     [ div [ class "modal-content" ]
                         [ div [ class "modal-header" ]
                             [ h3 [ class "modal-title" ] [ text ("Additional Details for " ++ b.title) ]
-                            , button [ type_ "button", class "btn-close", attribute "data-bs-dismiss" "modal", attribute "aria-label" "Close" ] []
+                            , button [ onClick (UpdateIndex Nothing), type_ "button", class "btn-close", attribute "data-bs-dismiss" "modal", attribute "aria-label" "Close" ] []
                             ]
                         , div [ class "modal-body" ]
                             [ Html.form []
@@ -459,8 +512,7 @@ viewModal model i b =
                         , checkStatus b i "In Progress" InProgress
                         , checkStatus b i "Not Started" NotStarted
                         , div [ class "modal-footer" ]
-                            [ button [ type_ "button", class "btn btn-secondary", attribute "data-bs-dismiss" "modal" ] [ text "Close" ]
-                            , button [ type_ "button", class "btn button" ] [ text "Save changes" ]
+                            [ button [ onClick (UpdateIndex Nothing), type_ "button", class "btn btn-secondary", attribute "data-bs-dismiss" "modal" ] [ text "Close" ]
                             ]
                         ]
                     ]
@@ -560,14 +612,11 @@ viewBullet i model =
                             [ checkedBullet
                                 bullet
                                 i
-
-                            -- input [ class "form-check-input", type_ "checkbox", value "", id "unchecked" ] []
-                            -- , label [ class "form-check-label", for "unchecked" ] []
                             ]
-                        , input [ value bullet.title, onInput (Edit i) ] []
+                        , input [ value bullet.title, onInput (Edit i), onFocus (UpdateIndex (Just i)), onBlur (UpdateIndex Nothing) ] []
                         , div []
                             [ button [ class "btn button-small", onClick (Delete i) ] [ text "-" ]
-                            , button [ class "btn button-small", type_ "button", attribute "data-bs-toggle" "modal", attribute "data-bs-target" ("#" ++ getModalId i) ] [ text "i" ]
+                            , button [ onClick (UpdateIndex (Just i)), class "btn button-small", type_ "button", attribute "data-bs-toggle" "modal", attribute "data-bs-target" ("#" ++ getModalId i) ] [ text "i" ]
                             , viewModal model i bullet
                             ]
                         ]
