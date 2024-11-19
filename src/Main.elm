@@ -20,7 +20,7 @@ import Task
 import Time
 
 
-main : Program String Model Msg
+main : Program Json.Encode.Value Model Msg
 main =
     Browser.element
         { init = init
@@ -30,28 +30,45 @@ main =
         }
 
 
-init : String -> ( Model, Cmd Msg )
+init : Json.Encode.Value -> ( Model, Cmd Msg )
 init s =
     let
+        { userId, authToken } =
+            case Decode.decodeValue decodeFlags s of
+                Err _ ->
+                    { userId = "", authToken = "" }
+
+                Ok res ->
+                    res
+
         firestore =
             Firestore.Config.new
                 { apiKey = Environment.apiKey
                 , project = Environment.projectId
                 }
+                |> Firestore.Config.withAuthorization authToken
                 |> Firestore.init
     in
-    ( { items = decoder s
+    ( { items = []
       , userInput = ""
       , dragDrop = Html5.DragDrop.init
       , zone = Maybe.Nothing
       , firestore = firestore
       , editingIndex = Nothing
+      , userId = userId
       }
     , Cmd.batch
         [ getZone
-        , getFromDb firestore
+        , getFromDb firestore userId
         ]
     )
+
+
+decodeFlags : Decode.Decoder { userId : String, authToken : String }
+decodeFlags =
+    Decode.map2 (\userId authToken -> { userId = userId, authToken = authToken })
+        (Decode.field "userId" Decode.string)
+        (Decode.field "authToken" Decode.string)
 
 
 toTask : Result error a -> Task.Task error a
@@ -71,6 +88,7 @@ type alias Model =
     , zone : Maybe Time.Zone
     , firestore : Firestore.Firestore
     , editingIndex : Maybe Int
+    , userId : String
     }
 
 
@@ -131,6 +149,7 @@ type Msg
     | DeleteFromDB (Result Firestore.Error ())
     | GetFromDB
     | NowEditing (Maybe Int)
+    | SignOut
 
 
 remove : Int -> List Bullet -> List Bullet
@@ -140,14 +159,16 @@ remove i list =
 
 subscriptions : Sub Msg
 subscriptions =
-    Time.every 200 (always GetFromDB)
+    Time.every 20000000 (always GetFromDB)
 
 
-getFromDb : Firestore.Firestore -> Cmd Msg
-getFromDb firestore =
+getFromDb : Firestore.Firestore -> String -> Cmd Msg
+getFromDb firestore userId =
     firestore
         |> Firestore.root
-        |> Firestore.collection "Bullets"
+        |> Firestore.collection "users"
+        |> Firestore.document userId
+        |> Firestore.subCollection "items"
         |> Firestore.build
         |> toTask
         |> Task.andThen (Firestore.list (Codec.asDecoder codecBullet) Firestore.Options.List.default)
@@ -166,7 +187,7 @@ update msg model =
                     in
                     case bullet of
                         Just b ->
-                            ( { model | items = remove i model.items }, deleteBullet model.firestore b )
+                            ( { model | items = remove i model.items }, deleteBullet model.firestore b model.userId )
 
                         Nothing ->
                             ( { model | items = remove i model.items }, Cmd.none )
@@ -187,6 +208,7 @@ update msg model =
                       }
                     , upsertBullet model.firestore
                         bullet
+                        model.userId
                     )
 
                 AddBefore ->
@@ -198,7 +220,7 @@ update msg model =
                 Edit i newString ->
                     let
                         editString =
-                            updated model.items model.firestore i (editBullet newString)
+                            updated model.items model.firestore i (editBullet newString) model.userId
                     in
                     ( { model | items = Tuple.first editString }, Tuple.second editString )
 
@@ -223,7 +245,7 @@ update msg model =
                 Time i timePosix ->
                     let
                         editTimePosix =
-                            updated model.items model.firestore i (updateTime timePosix)
+                            updated model.items model.firestore i (updateTime timePosix) model.userId
                     in
                     ( { model | items = Tuple.first editTimePosix }, Tuple.second editTimePosix )
 
@@ -233,21 +255,21 @@ update msg model =
                 UpdateTimeOfDay i timeOfDay ->
                     let
                         editTimeOfDay =
-                            updated model.items model.firestore i (updateTimeOfDay (Just timeOfDay))
+                            updated model.items model.firestore i (updateTimeOfDay (Just timeOfDay)) model.userId
                     in
                     ( { model | items = Tuple.first editTimeOfDay }, Tuple.second editTimeOfDay )
 
                 Progress i status ->
                     let
                         editStatus =
-                            updated model.items model.firestore i (updateProgress (Just status))
+                            updated model.items model.firestore i (updateProgress (Just status)) model.userId
                     in
                     ( { model | items = Tuple.first editStatus }, Tuple.second editStatus )
 
                 CheckedOff i checked ->
                     let
                         editChecked =
-                            updated model.items model.firestore i (updateCheckedOff checked)
+                            updated model.items model.firestore i (updateCheckedOff checked) model.userId
                     in
                     ( { model | items = Tuple.first editChecked }, Tuple.second editChecked )
 
@@ -281,7 +303,7 @@ update msg model =
                                                     fetchedItems
 
                                                 Just keptItem ->
-                                                    List.Extra.updateAt indexToSkip (\_ -> keptItem) fetchedItems
+                                                    List.Extra.setAt indexToSkip keptItem fetchedItems
                       }
                     , Cmd.none
                     )
@@ -311,19 +333,19 @@ update msg model =
                             ( { model | items = model.items }, Cmd.none )
 
                 GetFromDB ->
-                    ( model, getFromDb model.firestore )
+                    ( model, getFromDb model.firestore model.userId )
 
                 NowEditing newIndex ->
                     ( { model | editingIndex = newIndex }, Cmd.none )
 
-        x =
-            Debug.log "logging this" (Json.Encode.encode 0 (encoder newModel.items))
+                SignOut ->
+                    ( model, signOut () )
     in
-    ( newModel, Cmd.batch [ save x, cmd ] )
+    ( newModel, Cmd.batch [ cmd ] )
 
 
-updated : List Bullet -> Firestore.Firestore -> Int -> (Bullet -> Bullet) -> ( List Bullet, Cmd Msg )
-updated lst fs i func =
+updated : List Bullet -> Firestore.Firestore -> Int -> (Bullet -> Bullet) -> String -> ( List Bullet, Cmd Msg )
+updated lst fs i func userId =
     let
         newItems =
             List.Extra.updateAt i func lst
@@ -333,26 +355,24 @@ updated lst fs i func =
         List.Extra.getAt i newItems
       of
         Just bullet ->
-            upsertBullet fs bullet
+            upsertBullet fs bullet userId
 
         Nothing ->
             Cmd.none
     )
 
 
-upsertBullet : Firestore.Firestore -> Bullet -> Cmd Msg
-upsertBullet f b =
+upsertBullet : Firestore.Firestore -> Bullet -> String -> Cmd Msg
+upsertBullet f b userId =
     let
         time =
             Iso.fromTime b.time
     in
     f
         |> Firestore.root
-        -- |> Firestore.collection "Username"
-        -- |> Firestore.document "Tiff"
-        -- |> Firestore.subCollection "bullets/"
-        -- |> Firestore.document b.title
-        |> Firestore.collection "Bullets"
+        |> Firestore.collection "users"
+        |> Firestore.document userId
+        |> Firestore.subCollection "items"
         |> Firestore.document time
         |> Firestore.build
         |> toTask
@@ -360,15 +380,17 @@ upsertBullet f b =
         |> Task.attempt Upsert
 
 
-deleteBullet : Firestore.Firestore -> Bullet -> Cmd Msg
-deleteBullet firestore bullet =
+deleteBullet : Firestore.Firestore -> Bullet -> String -> Cmd Msg
+deleteBullet firestore bullet userId =
     let
         time =
             Iso.fromTime bullet.time
     in
     firestore
         |> Firestore.root
-        |> Firestore.collection "Bullets"
+        |> Firestore.collection "users"
+        |> Firestore.document userId
+        |> Firestore.subCollection "items"
         |> Firestore.document time
         |> Firestore.build
         |> toTask
@@ -414,7 +436,8 @@ editBullet newString bullet =
 view : Model -> Html Msg
 view model =
     div [ class "background" ]
-        [ p [ class "text-center fs-1 fw-bold font-monospace text-title " ] [ text "To-Do List" ]
+        [ button [ onClick SignOut ] [ text "Sign out" ]
+        , p [ class "text-center fs-1 fw-bold font-monospace text-title " ] [ text "To-Do List" ]
         , div [] []
         , div [ class "d-flex justify-content-center align-items-center" ]
             [ div [ class "d-flex mb-3" ]
@@ -623,28 +646,10 @@ checkedBullet bullet index =
         ]
 
 
-encoder : List Bullet -> Json.Encode.Value
-encoder items =
-    Json.Encode.list encodeBullet items
+port save : String -> Cmd msg
 
 
-encodeBullet : Bullet -> Json.Encode.Value
-encodeBullet b =
-    Json.Encode.object [ ( "input", Json.Encode.string b.title ), ( "time", Iso.encode b.time ), ( "timeOfDay", encodeTimeOfDayToJson b.timeOfDay ), ( "progress", encodeStatusToJson b.progress ), ( "checked", Json.Encode.bool b.checked ) ]
-
-
-encodeStatusToJson : Maybe Status -> Json.Encode.Value
-encodeStatusToJson status =
-    case status of
-        Just aStatus ->
-            let
-                stat =
-                    encodeStatus aStatus
-            in
-            Json.Encode.string stat
-
-        Nothing ->
-            Json.Encode.null
+port signOut : () -> Cmd msg
 
 
 encodeStatus : Status -> String
@@ -660,20 +665,6 @@ encodeStatus s =
             "Not Started"
 
 
-encodeTimeOfDayToJson : Maybe TimeOfDay -> Json.Encode.Value
-encodeTimeOfDayToJson t =
-    case t of
-        Just time ->
-            let
-                to =
-                    encodeTimeOfDay time
-            in
-            Json.Encode.string to
-
-        Nothing ->
-            Json.Encode.null
-
-
 encodeTimeOfDay : TimeOfDay -> String
 encodeTimeOfDay t =
     case t of
@@ -685,57 +676,6 @@ encodeTimeOfDay t =
 
         Evening ->
             "Evening"
-
-
-port save : String -> Cmd msg
-
-
-decoder : String -> List Bullet
-decoder string =
-    case Decode.decodeString decodeListBullets string of
-        Ok str ->
-            str
-
-        Err _ ->
-            []
-
-
-decodeListBullets : Decode.Decoder (List Bullet)
-decodeListBullets =
-    Decode.list decodeBullet
-
-
-decodeBullet : Decode.Decoder Bullet
-decodeBullet =
-    Decode.map5 Bullet
-        (Decode.field "input" Decode.string)
-        (Decode.field "time" Iso.decoder)
-        (Decode.field "timeOfDay" (Decode.maybe decodeTimeOfDay))
-        (Decode.field "progress" (Decode.maybe decodeStatus))
-        (Decode.field "checked" Decode.bool)
-
-
-decodeTimeOfDay : Decode.Decoder TimeOfDay
-decodeTimeOfDay =
-    Decode.oneOf [ decoderExactString "Morning" Morning, decoderExactString "Afternoon" Afternoon, decoderExactString "Evening" Evening ]
-
-
-decodeStatus : Decode.Decoder Status
-decodeStatus =
-    Decode.oneOf [ decoderExactString "Completed" Completed, decoderExactString "In Progress" InProgress, decoderExactString "Not Started" NotStarted ]
-
-
-decoderExactString : String -> b -> Decode.Decoder b
-decoderExactString expected t =
-    Decode.string
-        |> Decode.andThen
-            (\actual ->
-                if actual == expected then
-                    Decode.succeed t
-
-                else
-                    Decode.fail "doesn't match"
-            )
 
 
 codecBullet : Codec.Codec Bullet
