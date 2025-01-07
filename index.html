@@ -19,21 +19,75 @@
 </head>
 
 <body>
+	<div id="firebaseui-auth-container"></div>
+	<script src="https://www.gstatic.com/firebasejs/10.0.0/firebase-app-compat.js"></script>
+	<script src="https://www.gstatic.com/firebasejs/10.0.0/firebase-auth-compat.js"></script>
+	<script src="https://www.gstatic.com/firebasejs/ui/6.1.0/firebase-ui-auth.js"></script>
+	<link type="text/css" rel="stylesheet" href="https://www.gstatic.com/firebasejs/ui/6.1.0/firebase-ui-auth.css" />
+	<script type="module">
+		import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+		import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+		const firebaseConfig = {
+			apiKey: "AIzaSyCowwI4S0qqHFuvcA9w8xlM6YWAV2YfgZk",
+			authDomain: "todo-bbd76.firebaseapp.com",
+			projectId: "todo-bbd76",
+			storageBucket: "todo-bbd76.firebasestorage.app",
+			messagingSenderId: "628343234400",
+			appId: "1:628343234400:web:78219e03bbe69061968805",
+		};
+		const app = initializeApp(firebaseConfig);
+		const authInstance = getAuth(app);
+
+
+		onAuthStateChanged(authInstance, (user) => {
+
+			if (!user) {
+				const uiConfig = {
+					signInSuccessUrl: '.',
+					signInOptions: [
+						firebase.auth.EmailAuthProvider.PROVIDER_ID,
+					],
+					callbacks: {
+						signInSuccessWithAuthResults: function (authResult, redirectUrl) {
+							console.log(authResult);
+							return true;
+						}
+					}
+
+
+				}
+				const ui = new firebaseui.auth.AuthUI(authInstance);
+				ui.start('#firebaseui-auth-container', uiConfig);
+
+			} else {
+				var app2 = Elm.Main.init({
+					flags: localStorage.getItem("saved") || "",
+					node: document.getElementById("elm-app-is-loaded-here")
+				});
+				app2.ports.save.subscribe(function (message) {
+					localStorage.setItem("saved", message);
+				});
+				app2.ports.signout.subscribe(function() {
+					authInstance.signOut();
+					location.reload();
+				});
+
+
+				
+			}
+		})
+
+	</script>
 	<div id="elm-app-is-loaded-here"></div>
 	<script src="main.js"></script>
-	<script>
-		var app = Elm.Main.init({
-			flags: localStorage.getItem("saved") || "",
-			node: document.getElementById("elm-app-is-loaded-here")
-		});      
-		app.ports.save.subscribe(function(message) {
-			localStorage.setItem("saved", message);
-			
-		});
-	</script>
+
 	<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
 		integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
 		crossorigin="anonymous"></script>
+
+
+
 </body>
 
 </html>

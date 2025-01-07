@@ -9,15 +9,17 @@ import Firestore.Config
 import Firestore.Options.List
 import Firestore.Types.Reference as Reference
 import Html exposing (..)
-import Html.Attributes exposing (attribute, checked, class, for, id, name, placeholder, tabindex, type_, value)
+import Html.Attributes exposing (attribute, checked, class, classList, disabled, for, href, id, name, placeholder, tabindex, type_, value)
 import Html.Events exposing (onBlur, onClick, onFocus, onInput)
 import Html5.DragDrop
 import Iso8601 as Iso
 import Json.Decode as Decode
+import Json.Decode.Pipeline
 import Json.Encode
 import List.Extra
 import Task
 import Time
+import Tuple
 
 
 main : Program String Model Msg
@@ -31,7 +33,7 @@ main =
 
 
 init : String -> ( Model, Cmd Msg )
-init s =
+init user =
     let
         firestore =
             Firestore.Config.new
@@ -40,7 +42,7 @@ init s =
                 }
                 |> Firestore.init
     in
-    ( { items = decoder s, userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing }
+    ( { items = decoder user, userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing, list = [], listInput = "" }
     , Cmd.batch
         [ getZone
         , getFromDb firestore
@@ -66,6 +68,14 @@ type alias Model =
     , firestore : Firestore.Firestore
     , searchedString : String
     , index : Maybe Int
+    , list : List Nav
+    , listInput : String
+    }
+
+
+type alias Nav =
+    { title : String
+    , number : Int
     }
 
 
@@ -94,6 +104,9 @@ type alias Bullet =
     , timeOfDay : Maybe TimeOfDay
     , progress : Maybe Status
     , checked : Bool
+    , dropdownStatus : Maybe DropDownStatus
+    , selectedMonth : String
+    , day : Int
     }
 
 
@@ -107,6 +120,11 @@ type Status
     = Completed
     | NotStarted
     | InProgress
+
+
+type DropDownStatus
+    = Month
+    | NavSelect
 
 
 type Msg
@@ -128,6 +146,13 @@ type Msg
     | SearchAndRemoved String
     | Search String
     | UpdateIndex (Maybe Int)
+    | OpenDropdown Int DropDownStatus
+    | SelectedMonth Int String
+    | IncrementDay Int
+    | DecrementDay Int
+    | SignOut
+    | AddList
+    | EditNav String
 
 
 remove : Int -> List Bullet -> List Bullet
@@ -138,7 +163,7 @@ remove i list =
 subscriptions : Model -> Sub Msg
 subscriptions model =
     if model.searchedString == "" then
-        Time.every 2000 (always GetFromDB)
+        Time.every 10000 (always GetFromDB)
 
     else
         Sub.none
@@ -180,6 +205,9 @@ update msg model =
                             , timeOfDay = Maybe.Nothing
                             , progress = Maybe.Nothing
                             , checked = False
+                            , selectedMonth = ""
+                            , dropdownStatus = Nothing
+                            , day = 0
                             }
                     in
                     ( { model
@@ -264,7 +292,11 @@ update msg model =
                                     []
 
                                 Ok r ->
-                                    List.map .fields r.documents
+                                    let
+                                        listDB =
+                                            List.map .fields r.documents
+                                    in
+                                    everythingButFocused listDB model.items model.index
                       }
                     , Cmd.none
                     )
@@ -309,12 +341,50 @@ update msg model =
                     ( { model | searchedString = userInput }, Cmd.none )
 
                 UpdateIndex indx ->
-                    case indx of
-                        Just id ->
-                            ( { model | index = Just id }, everythingButFocused model.firestore id model.index )
+                    ( { model | index = indx }, Cmd.none )
 
-                        Nothing ->
-                            ( model, Cmd.none )
+                OpenDropdown index dropdownToggle ->
+                    let
+                        newItems =
+                            List.Extra.updateAt index (updateDropDownStatus dropdownToggle) model.items
+                    in
+                    ( { model | items = newItems }, Cmd.none )
+
+                SelectedMonth index month ->
+                    let
+                        editSelectedMonth =
+                            updated model.items model.firestore index (updateSelectedMonth month)
+                    in
+                    ( { model | items = Tuple.first editSelectedMonth }, Cmd.none )
+
+                IncrementDay index ->
+                    let
+                        editDay =
+                            updated model.items model.firestore index incrementSelectedDay
+                    in
+                    ( { model | items = Tuple.first editDay }, Cmd.none )
+
+                DecrementDay index ->
+                    let
+                        editDay =
+                            updated model.items model.firestore index decrementSelectedDay
+                    in
+                    ( { model | items = Tuple.first editDay }, Cmd.none )
+
+                SignOut ->
+                    ( model, signout () )
+
+                AddList ->
+                    let
+                        nav =
+                            { title = model.listInput
+                            , number = 0
+                            }
+                    in
+                    ( { model | list = model.list ++ [ nav ] }, Cmd.none )
+
+                EditNav userInput ->
+                    ( { model | listInput = userInput }, Cmd.none )
 
         x =
             Debug.log "logging this" (Json.Encode.encode 0 (encoder newModel.items))
@@ -322,21 +392,56 @@ update msg model =
     ( newModel, Cmd.batch [ save x, cmd ] )
 
 
-everythingButFocused : Firestore.Firestore -> Int -> Maybe Int -> Cmd Msg
-everythingButFocused fs i index =
-    case index of
-        Just indx ->
-            if indx /= i then
-                getFromDb fs
+decrementSelectedDay : Bullet -> Bullet
+decrementSelectedDay bullet =
+    if bullet.day == 0 then
+        { bullet | day = 0 }
 
-            else
-                Cmd.none
+    else
+        { bullet | day = bullet.day - 1 }
+
+
+incrementSelectedDay : Bullet -> Bullet
+incrementSelectedDay bullet =
+    if bullet.day < 31 then
+        { bullet | day = bullet.day + 1 }
+
+    else
+        { bullet | day = 31 }
+
+
+updateSelectedMonth : String -> Bullet -> Bullet
+updateSelectedMonth month bullet =
+    { bullet | selectedMonth = month, dropdownStatus = Just Month }
+
+
+updateDropDownStatus : DropDownStatus -> Bullet -> Bullet
+updateDropDownStatus status bullet =
+    case bullet.dropdownStatus of
+        Just _ ->
+            { bullet | dropdownStatus = Nothing }
 
         Nothing ->
-            Cmd.none
+            { bullet | dropdownStatus = Just status }
 
 
+everythingButFocused : List a -> List a -> Maybe Int -> List a
+everythingButFocused listDB listLocal index =
+    case index of
+        Just indx ->
+            let
+                item =
+                    List.Extra.getAt indx listLocal
+            in
+            case item of
+                Just b ->
+                    List.Extra.updateAt indx (\_ -> b) listDB
 
+                Nothing ->
+                    listDB
+
+        Nothing ->
+            listDB
 
 
 removeEverythingButsearched : String -> List Bullet -> List Bullet
@@ -433,26 +538,8 @@ editBullet newString bullet =
     { bullet | title = newString }
 
 
-view : Model -> Html Msg
-view model =
-    div [ class "background" ]
-        [ p [ class "text-center fs-1 fw-bold font-monospace text-title " ] [ text "To-Do List" ]
-        , div [] []
-        , div [ class "d-flex justify-content-center align-items-center" ]
-            [ div [ class "d-flex mb-3" ]
-                [ input [ class "form-control me-3", placeholder "Write something", value model.userInput, onInput Change ] []
-                , button [ class "btn button", onClick AddBefore ] [ text "+" ]
-                , button [ class "btn button", onClick (SearchAndRemoved model.searchedString) ] [ text "Q" ]
-                , input [ class "form-control me-3", placeholder "Search", value model.searchedString, onInput Search ] []
-                ]
-            ]
-        , div [ class "d-flex justify-content-center" ]
-            [ ul [ class "list-unstyled flex-column align-items-center" ]
-                (List.Extra.interweave (List.Extra.initialize (List.length model.items + 1) viewDropZone)
-                    (List.indexedMap (\i _ -> viewBullet i model) model.items)
-                )
-            ]
-        ]
+
+--Helper
 
 
 getModalId : Int -> String
@@ -467,6 +554,10 @@ standardTime time =
 
     else
         String.fromInt time
+
+
+
+--View
 
 
 viewModal : Model -> Int -> Bullet -> Html Msg
@@ -503,23 +594,143 @@ viewModal model i b =
                                     ]
                                 ]
                             ]
-                        , div [] [ text "Time" ]
+                        , h5 [] [ text "Time" ]
                         , checkTime b i "Morning" Morning
                         , checkTime b i "Afternoon" Afternoon
                         , checkTime b i "Evening" Evening
-                        , div [] [ text "Progress" ]
+                        , h5 [] [ text "Progress" ]
                         , checkStatus b i "Completed" Completed
                         , checkStatus b i "In Progress" InProgress
                         , checkStatus b i "Not Started" NotStarted
-                        , div [ class "modal-footer" ]
-                            [ button [ onClick (UpdateIndex Nothing), type_ "button", class "btn btn-secondary", attribute "data-bs-dismiss" "modal" ] [ text "Close" ]
+                        , h5 [] [ text "Due Date" ]
+                        , div [ class "d-flex align-items-center" ]
+                            [ text "Month: "
+                            , div [ class "dropdown" ]
+                                [ button [ class "btn btn-secondary dropdown-toggle", type_ "button", id "dropdownMenuButton", attribute "data-toggle" "dropdown",onClick (OpenDropdown i Month) ] []
+                                , div
+                                    [ let
+                                        monthDropDownClose =
+                                            if b.dropdownStatus == Just Month then
+                                                True
+
+                                            else
+                                                False
+                                      in
+                                      classList
+                                        [ ( "dropdown-menu", not monthDropDownClose )
+                                        ]
+                                    ]
+                                    [ selectMonth i "January"
+                                    , selectMonth i "February"
+                                    , selectMonth i "March"
+                                    , selectMonth i "April"
+                                    , selectMonth i "May"
+                                    , selectMonth i "June"
+                                    , selectMonth i "July"
+                                    , selectMonth i "August"
+                                    , selectMonth i "September"
+                                    , selectMonth i "November"
+                                    , selectMonth i "December"
+                                    ]
+                                ]
                             ]
+                        , div [ class "d-flex align-items-center" ]
+                            [ text "Day"
+                            , button [ onClick (DecrementDay i) ] [ text "-" ]
+                            , div [] [ text (String.fromInt b.day) ]
+                            , button [ onClick (IncrementDay i) ] [ text "+" ]
+                            ]
+
+                        -- , div [ class "dropdown" ]
+                        --     [ button [ class "btn btn-secondary dropdown-toggle", type_ "button", id "dropdownMenuButton", onClick (OpenDropdown i b.dropdownStatus) ] []
+                        --     , div
+                        --         [ let
+                        --             toggleOn =
+                        --                 if b.dropdownStatus == Just NavSelect then
+                        --                     True
+                        --                 else
+                        --                     False
+                        --           in
+                        --           classList
+                        --             [ ( "dropdown-menu", not toggleOn )
+                        --             , ( "show", not toggleOn )
+                        --             ]
+                        --         ]
+                        --         [--     { items : List Bullet
+                        --          --     , userInput : String
+                        --          --     , dragDrop : Html5.DragDrop.Model DragId DropId
+                        --          --     , zone : Maybe Time.Zone
+                        --          --     , firestore : Firestore.Firestore
+                        --          --     , searchedString : String
+                        --          --     , index : Maybe Int
+                        --          --     , list : List Nav
+                        --          --     , listInput : String
+                        --          --     }
+                        --          -- type alias Nav =
+                        --          --     { title : String
+                        --          --     , number : Int
+                        --          --     }
                         ]
+                    ]
+                , div [ class "modal-footer" ]
+                    [ button [ onClick (UpdateIndex Nothing), type_ "button", class "btn btn-secondary", attribute "data-bs-dismiss" "modal" ] [ text "Close" ]
                     ]
                 ]
 
         Nothing ->
             text "No zone"
+
+
+view : Model -> Html Msg
+view model =
+    div [ class "background" ]
+        [ p [ class "text-center fs-1 fw-bold font-monospace text-title " ] [ text "To-Do List" ]
+        , div [] []
+        , div [ class "d-flex justify-content-center align-items-center" ]
+            [ div [ class "d-flex mb-3" ]
+                [ input [ class "form-control me-3", placeholder "Write something", value model.userInput, onInput Change ] []
+                , button [ class "btn button", onClick AddBefore ] [ text "+" ]
+                , button [ class "btn button", onClick (SearchAndRemoved model.searchedString) ] [ text "Q" ]
+                , input [ class "form-control me-3", placeholder "Search", value model.searchedString, onInput Search ] []
+                ]
+            ]
+        , div [ class "d-flex justify-content-center" ]
+            [ ul [ class "list-unstyled flex-column align-items-center" ]
+                (List.Extra.interweave (List.Extra.initialize (List.length model.items + 1) viewDropZone)
+                    (List.indexedMap (\i _ -> viewBullet i model) model.items)
+                )
+            ]
+        , div [ class "fixed-bottom" ] [ button [ class "btn button", onClick SignOut ] [ text "Sign Out" ] ]
+        , div []
+            [ viewSideBar model
+            ]
+        ]
+
+
+viewSideBar : Model -> Html Msg
+viewSideBar model =
+    div [ class "sidebar sidebar-narrow-unfoldable border-end" ]
+        [ div [ class "sidebar-header border-bottom" ]
+            [ div [ class "sidebar-brand" ] [ text "Menu" ]
+            ]
+        , ul [ class "sidebar-nav" ]
+            [ li [ class "nav-title" ] [ text "Navigation" ]
+            , li [ class "nav-item" ]
+                [ a [] [ text "Lists" ] ]
+            , button [ class "btn button", onClick AddList ] [ text "+" ]
+            , div []
+                [ input [ placeholder "Add a list", value model.listInput, onInput EditNav ] []
+                ]
+            , div []
+                [ ul [] (List.map viewNav model.list)
+                ]
+            ]
+        ]
+
+
+selectMonth : Int -> String -> Html Msg
+selectMonth i month =
+    a [ class "dropdown-item", href "#", onClick (SelectedMonth i month) ] [ text month ]
 
 
 checkTime : Bullet -> Int -> String -> TimeOfDay -> Html Msg
@@ -554,6 +765,84 @@ checkStatus b i str status =
             ]
             []
         ]
+
+
+viewDropZone : Int -> Html Msg
+viewDropZone index =
+    hr (Html5.DragDrop.droppable DragDropMsg index ++ [ class "m-2" ]) []
+
+
+viewBullet : Int -> Model -> Html Msg
+viewBullet i model =
+    let
+        maybeBullet =
+            List.Extra.getAt i model.items
+    in
+    case maybeBullet of
+        Just bullet ->
+            div (Html5.DragDrop.draggable DragDropMsg i)
+                [ li [ class "d-flex justify-content-between align-items-center mb-2" ]
+                    [ div [ class "d-flex justify-content-between align-items-center" ]
+                        [ div [ class "form-check me-2" ]
+                            [ checkedBullet bullet i
+                            ]
+                        ]
+                    , input
+                        --span : List (Html.Attribute msg) -> List (Html msg) -> Html msg
+                        [ value bullet.title
+                        , class
+                            (if bullet.checked then
+                                "text-decoration-line-through"
+
+                             else if bullet.progress == Just Completed then
+                                "text-decoration-line-through"
+
+                             else
+                                "text-decoration-none"
+                            )
+                        , onInput (Edit i)
+                        , onFocus (UpdateIndex (Just i))
+                        , onBlur (UpdateIndex Nothing)
+                        ]
+                        []
+                    , div []
+                        [ button [ class "btn button-small", onClick (Delete i) ] [ text "-" ]
+                        , button [ onClick (UpdateIndex (Just i)), class "btn button-small", type_ "button", attribute "data-bs-toggle" "modal", attribute "data-bs-target" ("#" ++ getModalId i) ] [ text "i" ]
+                        , viewModal model i bullet
+                        ]
+                    ]
+                ]
+
+        Nothing ->
+            text "No bullet"
+
+
+viewNav : Nav -> Html Msg
+viewNav nav =
+    div []
+        [ input [ value nav.title, disabled True ] []
+        ]
+
+
+checkedBullet : Bullet -> Int -> Html Msg
+checkedBullet bullet index =
+    div [ class "form-check me-2" ]
+        [ label [ class "form-check-label", for "flexCheckChecked" ] []
+        , input
+            [ checked
+                bullet.checked
+            , onClick (CheckedOff index (not bullet.checked))
+            , class "form-check-input"
+            , type_ "checkbox"
+            , value ""
+            , id "flexCheckChecked"
+            ]
+            []
+        ]
+
+
+
+--Drag/Drop
 
 
 moveId : DragId -> DropId -> List a -> List a
@@ -592,56 +881,8 @@ insertItem index item list =
     before ++ [ item ] ++ after
 
 
-viewDropZone : Int -> Html Msg
-viewDropZone index =
-    hr (Html5.DragDrop.droppable DragDropMsg index ++ [ class "m-2" ]) []
 
-
-viewBullet : Int -> Model -> Html Msg
-viewBullet i model =
-    let
-        maybeBullet =
-            List.Extra.getAt i model.items
-    in
-    case maybeBullet of
-        Just bullet ->
-            div (Html5.DragDrop.draggable DragDropMsg i)
-                [ li []
-                    [ div [ class "d-flex justify-content-between align-items-center" ]
-                        [ div [ class "form-check me-2" ]
-                            [ checkedBullet
-                                bullet
-                                i
-                            ]
-                        , input [ value bullet.title, onInput (Edit i), onFocus (UpdateIndex (Just i)), onBlur (UpdateIndex Nothing) ] []
-                        , div []
-                            [ button [ class "btn button-small", onClick (Delete i) ] [ text "-" ]
-                            , button [ onClick (UpdateIndex (Just i)), class "btn button-small", type_ "button", attribute "data-bs-toggle" "modal", attribute "data-bs-target" ("#" ++ getModalId i) ] [ text "i" ]
-                            , viewModal model i bullet
-                            ]
-                        ]
-                    ]
-                ]
-
-        Nothing ->
-            text "No bullet"
-
-
-checkedBullet : Bullet -> Int -> Html Msg
-checkedBullet bullet index =
-    div [ class "form-check me-2" ]
-        [ label [ class "form-check-label", for "flexCheckChecked" ] []
-        , input
-            [ checked
-                bullet.checked
-            , onClick (CheckedOff index (not bullet.checked))
-            , class "form-check-input"
-            , type_ "checkbox"
-            , value ""
-            , id "flexCheckChecked"
-            ]
-            []
-        ]
+--encoders/decoders
 
 
 encoder : List Bullet -> Json.Encode.Value
@@ -651,7 +892,7 @@ encoder items =
 
 encodeBullet : Bullet -> Json.Encode.Value
 encodeBullet b =
-    Json.Encode.object [ ( "input", Json.Encode.string b.title ), ( "time", Iso.encode b.time ), ( "timeOfDay", encodeTimeOfDayToJson b.timeOfDay ), ( "progress", encodeStatusToJson b.progress ), ( "checked", Json.Encode.bool b.checked ) ]
+    Json.Encode.object [ ( "input", Json.Encode.string b.title ), ( "time", Iso.encode b.time ), ( "timeOfDay", encodeTimeOfDayToJson b.timeOfDay ), ( "progress", encodeStatusToJson b.progress ), ( "checked", Json.Encode.bool b.checked ), ( "dropdownStatus", encodeDropDownToJson b.dropdownStatus ), ( "selectedMonth", Json.Encode.string b.selectedMonth ) ]
 
 
 encodeStatusToJson : Maybe Status -> Json.Encode.Value
@@ -708,7 +949,35 @@ encodeTimeOfDay t =
             "Evening"
 
 
-port save : String -> Cmd msg
+encodeDropDownToJson : Maybe DropDownStatus -> Json.Encode.Value
+encodeDropDownToJson dropDownStatus =
+    case dropDownStatus of
+        Just NavSelect ->
+            let
+                to =
+                    encodeDropDown NavSelect
+            in
+            Json.Encode.string to
+
+        Just Month ->
+            let
+                to =
+                    encodeDropDown Month
+            in
+            Json.Encode.string to
+
+        Nothing ->
+            Json.Encode.null
+
+
+encodeDropDown : DropDownStatus -> String
+encodeDropDown dropDownStatus =
+    case dropDownStatus of
+        NavSelect ->
+            "NavSelect"
+
+        Month ->
+            "Month"
 
 
 decoder : String -> List Bullet
@@ -728,12 +997,15 @@ decodeListBullets =
 
 decodeBullet : Decode.Decoder Bullet
 decodeBullet =
-    Decode.map5 Bullet
-        (Decode.field "input" Decode.string)
-        (Decode.field "time" Iso.decoder)
-        (Decode.field "timeOfDay" (Decode.maybe decodeTimeOfDay))
-        (Decode.field "progress" (Decode.maybe decodeStatus))
-        (Decode.field "checked" Decode.bool)
+    Decode.succeed Bullet
+        |> Json.Decode.Pipeline.required "input" Decode.string
+        |> Json.Decode.Pipeline.required "time" Iso.decoder
+        |> Json.Decode.Pipeline.required "timeOfDay" (Decode.maybe decodeTimeOfDay)
+        |> Json.Decode.Pipeline.required "progress" (Decode.maybe decodeStatus)
+        |> Json.Decode.Pipeline.required "checked" Decode.bool
+        |> Json.Decode.Pipeline.required "dropdownStatus" (Decode.maybe decodeDropDown)
+        |> Json.Decode.Pipeline.required "selectedMonth" Decode.string
+        |> Json.Decode.Pipeline.required "day" Decode.int
 
 
 decodeTimeOfDay : Decode.Decoder TimeOfDay
@@ -744,6 +1016,11 @@ decodeTimeOfDay =
 decodeStatus : Decode.Decoder Status
 decodeStatus =
     Decode.oneOf [ decoderExactString "Completed" Completed, decoderExactString "In Progress" InProgress, decoderExactString "Not Started" NotStarted ]
+
+
+decodeDropDown : Decode.Decoder DropDownStatus
+decodeDropDown =
+    Decode.oneOf [ decoderExactString "NavSelect" NavSelect, decoderExactString "Month" Month ]
 
 
 decoderExactString : String -> b -> Decode.Decoder b
@@ -767,7 +1044,20 @@ codecBullet =
         |> Codec.required "timeOfDay" .timeOfDay (Codec.maybe codecTime)
         |> Codec.required "progress" .progress (Codec.maybe codecStatus)
         |> Codec.required "checked" .checked Codec.bool
+        |> Codec.required "dropdownStatus" .dropdownStatus (Codec.maybe codecDropDown)
+        |> Codec.required "selectedMonth" .selectedMonth Codec.string
+        |> Codec.required "day" .day Codec.int
         |> Codec.build
+
+
+codecDropDown : Codec.Field DropDownStatus
+codecDropDown =
+    codecOneOf
+        encodeDropDown
+        Codec.string
+        [ ( "NavSelect", NavSelect )
+        , ( "Month", Month )
+        ]
 
 
 codecTime : Codec.Field TimeOfDay
@@ -808,3 +1098,13 @@ codecOneOf show codec =
                     show
     in
     List.foldr tryCodec (Codec.fail "None matched")
+
+
+
+--ports
+
+
+port save : String -> Cmd msg
+
+
+port signout : () -> Cmd msg
