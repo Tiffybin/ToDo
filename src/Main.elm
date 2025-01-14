@@ -383,21 +383,21 @@ update msg model =
                         editSelectedMonth =
                             updated model.items model.firestore index (updateSelectedMonth month)
                     in
-                    ( { model | items = Tuple.first editSelectedMonth }, Cmd.none )
+                    ( { model | items = Tuple.first editSelectedMonth }, Tuple.second editSelectedMonth )
 
                 IncrementDay index ->
                     let
                         editDay =
                             updated model.items model.firestore index incrementSelectedDay
                     in
-                    ( { model | items = Tuple.first editDay }, Cmd.none )
+                    ( { model | items = Tuple.first editDay }, Tuple.second editDay )
 
                 DecrementDay index ->
                     let
                         editDay =
                             updated model.items model.firestore index decrementSelectedDay
                     in
-                    ( { model | items = Tuple.first editDay }, Cmd.none )
+                    ( { model | items = Tuple.first editDay },Tuple.second editDay )
 
                 SignOut ->
                     ( model, signout () )
@@ -516,10 +516,6 @@ upsertBullet f b =
     in
     f
         |> Firestore.root
-        -- |> Firestore.collection "Username"
-        -- |> Firestore.document "Tiff"
-        -- |> Firestore.subCollection "bullets/"
-        -- |> Firestore.document b.title
         |> Firestore.collection "Bullets"
         |> Firestore.document time
         |> Firestore.build
