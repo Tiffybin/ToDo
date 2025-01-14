@@ -74,9 +74,7 @@ type alias Model =
 
 
 type alias Nav =
-    { title : String
-    , number : Int
-    }
+    String
 
 
 type alias Document =
@@ -106,6 +104,7 @@ type alias Bullet =
     , checked : Bool
     , dropdownStatus : Maybe DropDownStatus
     , selectedMonth : String
+    , nav : Nav
     , day : Int
     }
 
@@ -153,6 +152,9 @@ type Msg
     | SignOut
     | AddList
     | EditNav String
+    | SelectedNav Int Nav
+    | DeleteNav String
+    | GetNav (Result Firestore.Error (Firestore.Documents Nav))
 
 
 remove : Int -> List Bullet -> List Bullet
@@ -178,6 +180,18 @@ getFromDb firestore =
         |> toTask
         |> Task.andThen (Firestore.list (Codec.asDecoder codecBullet) Firestore.Options.List.default)
         |> Task.attempt Get
+
+
+
+-- getNavFromDb : Firestore.Firestore -> Cmd Msg
+-- getNavFromDb firestore =
+--     firestore
+--         |> Firestore.root
+--         |> Firestore.collection "Navs"
+--         |> Firestore.build
+--         |> toTask
+--         |> Task.andThen (Firestore.list (Codec.asDecoder codecNav) Firestore.Options.List.default)
+--         |> Task.attempt GetNav
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -207,6 +221,7 @@ update msg model =
                             , checked = False
                             , selectedMonth = ""
                             , dropdownStatus = Nothing
+                            , nav = ""
                             , day = 0
                             }
                     in
@@ -301,6 +316,19 @@ update msg model =
                     , Cmd.none
                     )
 
+                GetNav result ->
+                    ( { model
+                        | list =
+                            case result of
+                                Err _ ->
+                                    []
+
+                                Ok r ->
+                                    List.map .fields r.documents
+                      }
+                    , Cmd.none
+                    )
+
                 Upsert result ->
                     case result of
                         Err error ->
@@ -377,14 +405,22 @@ update msg model =
                 AddList ->
                     let
                         nav =
-                            { title = model.listInput
-                            , number = 0
-                            }
+                            model.listInput
                     in
                     ( { model | list = model.list ++ [ nav ] }, Cmd.none )
 
                 EditNav userInput ->
                     ( { model | listInput = userInput }, Cmd.none )
+
+                SelectedNav index nav ->
+                    let
+                        editSelectedNav =
+                            updated model.items model.firestore index (updateSelectedNav nav)
+                    in
+                    ( { model | items = Tuple.first editSelectedNav }, Cmd.none )
+
+                DeleteNav title ->
+                    ( { model | list = List.filter (\name -> title /= name) model.list }, Cmd.none )
 
         x =
             Debug.log "logging this" (Json.Encode.encode 0 (encoder newModel.items))
@@ -408,6 +444,11 @@ incrementSelectedDay bullet =
 
     else
         { bullet | day = 31 }
+
+
+updateSelectedNav : Nav -> Bullet -> Bullet
+updateSelectedNav nav bullet =
+    { bullet | selectedMonth = nav, dropdownStatus = Just NavSelect }
 
 
 updateSelectedMonth : String -> Bullet -> Bullet
@@ -497,6 +538,18 @@ deleteBullet firestore bullet =
         |> Firestore.root
         |> Firestore.collection "Bullets"
         |> Firestore.document time
+        |> Firestore.build
+        |> toTask
+        |> Task.andThen Firestore.delete
+        |> Task.attempt DeleteFromDB
+
+
+deleteNav : Firestore.Firestore -> Nav -> Cmd Msg
+deleteNav firestore nav =
+    firestore
+        |> Firestore.root
+        |> Firestore.collection "Bullets"
+        |> Firestore.document nav
         |> Firestore.build
         |> toTask
         |> Task.andThen Firestore.delete
@@ -606,18 +659,10 @@ viewModal model i b =
                         , div [ class "d-flex align-items-center" ]
                             [ text "Month: "
                             , div [ class "dropdown" ]
-                                [ button [ class "btn btn-secondary dropdown-toggle", type_ "button", id "dropdownMenuButton", attribute "data-toggle" "dropdown",onClick (OpenDropdown i Month) ] []
+                                [ button [ class "btn btn-secondary dropdown-toggle", type_ "button", id "dropdownMenuButton", attribute "data-bs-toggle" "dropdown" ] [ text b.selectedMonth ]
                                 , div
-                                    [ let
-                                        monthDropDownClose =
-                                            if b.dropdownStatus == Just Month then
-                                                True
-
-                                            else
-                                                False
-                                      in
-                                      classList
-                                        [ ( "dropdown-menu", not monthDropDownClose )
+                                    [ classList
+                                        [ ( "dropdown-menu", True )
                                         ]
                                     ]
                                     [ selectMonth i "January"
@@ -640,40 +685,23 @@ viewModal model i b =
                             , div [] [ text (String.fromInt b.day) ]
                             , button [ onClick (IncrementDay i) ] [ text "+" ]
                             ]
-
-                        -- , div [ class "dropdown" ]
-                        --     [ button [ class "btn btn-secondary dropdown-toggle", type_ "button", id "dropdownMenuButton", onClick (OpenDropdown i b.dropdownStatus) ] []
-                        --     , div
-                        --         [ let
-                        --             toggleOn =
-                        --                 if b.dropdownStatus == Just NavSelect then
-                        --                     True
-                        --                 else
-                        --                     False
-                        --           in
-                        --           classList
-                        --             [ ( "dropdown-menu", not toggleOn )
-                        --             , ( "show", not toggleOn )
-                        --             ]
-                        --         ]
-                        --         [--     { items : List Bullet
-                        --          --     , userInput : String
-                        --          --     , dragDrop : Html5.DragDrop.Model DragId DropId
-                        --          --     , zone : Maybe Time.Zone
-                        --          --     , firestore : Firestore.Firestore
-                        --          --     , searchedString : String
-                        --          --     , index : Maybe Int
-                        --          --     , list : List Nav
-                        --          --     , listInput : String
-                        --          --     }
-                        --          -- type alias Nav =
-                        --          --     { title : String
-                        --          --     , number : Int
-                        --          --     }
+                        , h5 [] [ text "List" ]
+                        , div [ class "dropdown" ]
+                            [ button [ class "btn btn-secondary dropdown-toggle", type_ "button", id "dropdownMenuButton", attribute "data-bs-toggle" "dropdown" ]
+                                [ text b.nav ]
+                            , div
+                                [ classList
+                                    [ ( "dropdown-menu", True )
+                                    ]
+                                ]
+                                [ ul []
+                                    (List.map (\string -> li [] [ text string ]) model.list)
+                                ]
+                            ]
+                        , div [ class "modal-footer" ]
+                            [ button [ onClick (UpdateIndex Nothing), type_ "button", class "btn btn-secondary", attribute "data-bs-dismiss" "modal" ] [ text "Close" ]
+                            ]
                         ]
-                    ]
-                , div [ class "modal-footer" ]
-                    [ button [ onClick (UpdateIndex Nothing), type_ "button", class "btn btn-secondary", attribute "data-bs-dismiss" "modal" ] [ text "Close" ]
                     ]
                 ]
 
@@ -733,6 +761,11 @@ selectMonth i month =
     a [ class "dropdown-item", href "#", onClick (SelectedMonth i month) ] [ text month ]
 
 
+selectNav : Int -> String -> Html Msg
+selectNav i month =
+    a [ class "dropdown-item", href "#", onClick (SelectedMonth i month) ] [ text "" ]
+
+
 checkTime : Bullet -> Int -> String -> TimeOfDay -> Html Msg
 checkTime b i str timeOfDay =
     div [ class "form-check" ]
@@ -760,7 +793,7 @@ checkStatus b i str status =
             , onClick (Progress i status)
             , class "form-check-input"
             , type_ "radio"
-            , name "radio"
+            , name "radio1"
             , id str
             ]
             []
@@ -787,22 +820,21 @@ viewBullet i model =
                             [ checkedBullet bullet i
                             ]
                         ]
+
                     , input
-                        --span : List (Html.Attribute msg) -> List (Html msg) -> Html msg
                         [ value bullet.title
                         , class
                             (if bullet.checked then
                                 "text-decoration-line-through"
-
                              else if bullet.progress == Just Completed then
                                 "text-decoration-line-through"
-
                              else
                                 "text-decoration-none"
                             )
                         , onInput (Edit i)
                         , onFocus (UpdateIndex (Just i))
                         , onBlur (UpdateIndex Nothing)
+                        
                         ]
                         []
                     , div []
@@ -819,9 +851,14 @@ viewBullet i model =
 
 viewNav : Nav -> Html Msg
 viewNav nav =
-    div []
-        [ input [ value nav.title, disabled True ] []
+    div [class "d-flex justify-content-center" ]
+        [ input [ value nav, disabled True ] []
+        , button [ class "btn button", onClick (DeleteNav nav) ] [ text "-" ]
+       
         ]
+
+
+
 
 
 checkedBullet : Bullet -> Int -> Html Msg
@@ -885,6 +922,16 @@ insertItem index item list =
 --encoders/decoders
 
 
+encoderNav : List Nav -> Json.Encode.Value
+encoderNav navs =
+    Json.Encode.list encodeNav navs
+
+
+encodeNav : Nav -> Json.Encode.Value
+encodeNav nav =
+    Json.Encode.string nav
+
+
 encoder : List Bullet -> Json.Encode.Value
 encoder items =
     Json.Encode.list encodeBullet items
@@ -892,7 +939,17 @@ encoder items =
 
 encodeBullet : Bullet -> Json.Encode.Value
 encodeBullet b =
-    Json.Encode.object [ ( "input", Json.Encode.string b.title ), ( "time", Iso.encode b.time ), ( "timeOfDay", encodeTimeOfDayToJson b.timeOfDay ), ( "progress", encodeStatusToJson b.progress ), ( "checked", Json.Encode.bool b.checked ), ( "dropdownStatus", encodeDropDownToJson b.dropdownStatus ), ( "selectedMonth", Json.Encode.string b.selectedMonth ) ]
+    Json.Encode.object
+        [ ( "input", Json.Encode.string b.title )
+        , ( "time", Iso.encode b.time )
+        , ( "timeOfDay", encodeTimeOfDayToJson b.timeOfDay )
+        , ( "progress", encodeStatusToJson b.progress )
+        , ( "checked", Json.Encode.bool b.checked )
+        , ( "dropdownStatus", encodeDropDownToJson b.dropdownStatus )
+        , ( "selectedMonth", Json.Encode.string b.selectedMonth )
+        , ( "nav", Json.Encode.string b.nav )
+        , ( "day", Json.Encode.int b.day )
+        ]
 
 
 encodeStatusToJson : Maybe Status -> Json.Encode.Value
@@ -995,6 +1052,11 @@ decodeListBullets =
     Decode.list decodeBullet
 
 
+decodeListNav : Decode.Decoder (List Nav)
+decodeListNav =
+    Decode.list Decode.string
+
+
 decodeBullet : Decode.Decoder Bullet
 decodeBullet =
     Decode.succeed Bullet
@@ -1005,6 +1067,7 @@ decodeBullet =
         |> Json.Decode.Pipeline.required "checked" Decode.bool
         |> Json.Decode.Pipeline.required "dropdownStatus" (Decode.maybe decodeDropDown)
         |> Json.Decode.Pipeline.required "selectedMonth" Decode.string
+        |> Json.Decode.Pipeline.required "nav" Decode.string
         |> Json.Decode.Pipeline.required "day" Decode.int
 
 
@@ -1046,8 +1109,14 @@ codecBullet =
         |> Codec.required "checked" .checked Codec.bool
         |> Codec.required "dropdownStatus" .dropdownStatus (Codec.maybe codecDropDown)
         |> Codec.required "selectedMonth" .selectedMonth Codec.string
+        |> Codec.required "nav" .nav Codec.string
         |> Codec.required "day" .day Codec.int
         |> Codec.build
+
+
+
+-- codecNav : Codec.Codec Nav
+-- codecNav =
 
 
 codecDropDown : Codec.Field DropDownStatus

@@ -33,10 +33,12 @@
 }
 
 
-
+.highlight {
+    background-color: yellow
+}
 
 .sidebar {
-    width: 350px;
+    width: 450px;
     background-color: #f8f9fa;
     border-right: 1px solid #dee2e6;
     height: 100vh;
@@ -46,7 +48,7 @@
 }
 
 .sidebar.sidebar-narrow-unfoldable {
-    width: 150px;
+    width: 260px;
 }
 
 .sidebar-header {
