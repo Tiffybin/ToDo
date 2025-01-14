@@ -404,10 +404,15 @@ update msg model =
 
                 AddList ->
                     let
-                        nav =
-                            model.listInput
+                     
+                        navs =
+                            if List.member model.listInput model.list then
+                                model.list
+
+                            else
+                                model.list ++ [ model.listInput ]
                     in
-                    ( { model | list = model.list ++ [ nav ] }, Cmd.none )
+                    ( { model | list = navs }, Cmd.none )
 
                 EditNav userInput ->
                     ( { model | listInput = userInput }, Cmd.none )
@@ -691,10 +696,8 @@ viewModal model i b =
                                     ]
                                 ]
                                 [ ul []
-                                    (List.map (\ item-> li [] [selectNav i item]) model.list)
-  
+                                    (List.map (\item -> li [] [ selectNav i item ]) model.list)
                                 ]
-
                             ]
                         , div [ class "modal-footer" ]
                             [ button [ onClick (UpdateIndex Nothing), type_ "button", class "btn btn-secondary", attribute "data-bs-dismiss" "modal" ] [ text "Close" ]
@@ -748,7 +751,7 @@ viewSideBar model =
                 [ input [ placeholder "Add a list", value model.listInput, onInput EditNav ] []
                 ]
             , div []
-                [ ul [] (List.map viewNav model.list)
+                [ ul [] (List.map (viewNav model) model.list)
                 ]
             ]
         ]
@@ -759,11 +762,9 @@ selectMonth i month =
     a [ class "dropdown-item", href "#", onClick (SelectedMonth i month) ] [ text month ]
 
 
-selectNav : Int -> Nav  -> Html Msg
-selectNav i nav  =
+selectNav : Int -> Nav -> Html Msg
+selectNav i nav =
     a [ class "dropdown-item", href "#", onClick (SelectedNav i nav) ] [ text nav ]
-    
-        
 
 
 checkTime : Bullet -> Int -> String -> TimeOfDay -> Html Msg
@@ -849,11 +850,12 @@ viewBullet i model =
             text "No bullet"
 
 
-viewNav : Nav -> Html Msg
-viewNav nav =
+viewNav : Model -> Nav -> Html Msg
+viewNav model nav =
     div [ class "d-flex justify-content-center" ]
         [ input [ value nav, disabled True ] []
         , button [ class "btn button", onClick (DeleteNav nav) ] [ text "-" ]
+        , p [] [ text (String.fromInt (List.length (List.filter (\bullet -> bullet.nav == nav) model.items))) ]
         ]
 
 
