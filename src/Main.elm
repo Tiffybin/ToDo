@@ -397,7 +397,7 @@ update msg model =
                         editDay =
                             updated model.items model.firestore index decrementSelectedDay
                     in
-                    ( { model | items = Tuple.first editDay },Tuple.second editDay )
+                    ( { model | items = Tuple.first editDay }, Tuple.second editDay )
 
                 SignOut ->
                     ( model, signout () )
@@ -417,7 +417,7 @@ update msg model =
                         editSelectedNav =
                             updated model.items model.firestore index (updateSelectedNav nav)
                     in
-                    ( { model | items = Tuple.first editSelectedNav }, Cmd.none )
+                    ( { model | items = Tuple.first editSelectedNav }, Tuple.second editSelectedNav )
 
                 DeleteNav title ->
                     ( { model | list = List.filter (\name -> title /= name) model.list }, Cmd.none )
@@ -448,7 +448,7 @@ incrementSelectedDay bullet =
 
 updateSelectedNav : Nav -> Bullet -> Bullet
 updateSelectedNav nav bullet =
-    { bullet | selectedMonth = nav, dropdownStatus = Just NavSelect }
+    { bullet | nav = nav, dropdownStatus = Just NavSelect }
 
 
 updateSelectedMonth : String -> Bullet -> Bullet
@@ -691,8 +691,10 @@ viewModal model i b =
                                     ]
                                 ]
                                 [ ul []
-                                    (List.map (\string -> li [] [ text string ]) model.list)
+                                    (List.map (\ item-> li [] [selectNav i item]) model.list)
+  
                                 ]
+
                             ]
                         , div [ class "modal-footer" ]
                             [ button [ onClick (UpdateIndex Nothing), type_ "button", class "btn btn-secondary", attribute "data-bs-dismiss" "modal" ] [ text "Close" ]
@@ -757,9 +759,11 @@ selectMonth i month =
     a [ class "dropdown-item", href "#", onClick (SelectedMonth i month) ] [ text month ]
 
 
-selectNav : Int -> String -> Html Msg
-selectNav i month =
-    a [ class "dropdown-item", href "#", onClick (SelectedMonth i month) ] [ text "" ]
+selectNav : Int -> Nav  -> Html Msg
+selectNav i nav  =
+    a [ class "dropdown-item", href "#", onClick (SelectedNav i nav) ] [ text nav ]
+    
+        
 
 
 checkTime : Bullet -> Int -> String -> TimeOfDay -> Html Msg
@@ -816,21 +820,21 @@ viewBullet i model =
                             [ checkedBullet bullet i
                             ]
                         ]
-
                     , input
                         [ value bullet.title
                         , class
                             (if bullet.checked then
                                 "text-decoration-line-through"
+
                              else if bullet.progress == Just Completed then
                                 "text-decoration-line-through"
+
                              else
                                 "text-decoration-none"
                             )
                         , onInput (Edit i)
                         , onFocus (UpdateIndex (Just i))
                         , onBlur (UpdateIndex Nothing)
-                        
                         ]
                         []
                     , div []
@@ -847,14 +851,10 @@ viewBullet i model =
 
 viewNav : Nav -> Html Msg
 viewNav nav =
-    div [class "d-flex justify-content-center" ]
+    div [ class "d-flex justify-content-center" ]
         [ input [ value nav, disabled True ] []
         , button [ class "btn button", onClick (DeleteNav nav) ] [ text "-" ]
-       
         ]
-
-
-
 
 
 checkedBullet : Bullet -> Int -> Html Msg
