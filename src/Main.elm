@@ -77,6 +77,10 @@ type alias Nav =
     String
 
 
+type alias DbNav =
+    { title : String }
+
+
 type alias Document =
     { reference : Reference.Reference
     , integer : Int
@@ -154,7 +158,8 @@ type Msg
     | EditNav String
     | SelectedNav Int Nav
     | DeleteNav String
-    | GetNav (Result Firestore.Error (Firestore.Documents Nav))
+    | GetNav (Result Firestore.Error (Firestore.Documents DbNav))
+    | NoOp
 
 
 remove : Int -> List Bullet -> List Bullet
@@ -182,16 +187,15 @@ getFromDb firestore =
         |> Task.attempt Get
 
 
-
--- getNavFromDb : Firestore.Firestore -> Cmd Msg
--- getNavFromDb firestore =
---     firestore
---         |> Firestore.root
---         |> Firestore.collection "Navs"
---         |> Firestore.build
---         |> toTask
---         |> Task.andThen (Firestore.list (Codec.asDecoder codecNav) Firestore.Options.List.default)
---         |> Task.attempt GetNav
+getNavFromDb : Firestore.Firestore -> Cmd Msg
+getNavFromDb firestore =
+    firestore
+        |> Firestore.root
+        |> Firestore.collection "Navs"
+        |> Firestore.build
+        |> toTask
+        |> Task.andThen (Firestore.list (Codec.asDecoder codecNav) Firestore.Options.List.default)
+        |> Task.attempt GetNav
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -324,7 +328,11 @@ update msg model =
                                     []
 
                                 Ok r ->
-                                    List.map .fields r.documents
+                                    let
+                                        dbNavList =
+                                            List.map .fields r.documents
+                                    in
+                                    List.map (\dbNav -> dbNav.title) dbNavList
                       }
                     , Cmd.none
                     )
@@ -354,7 +362,7 @@ update msg model =
                             ( { model | items = model.items }, Cmd.none )
 
                 GetFromDB ->
-                    ( model, getFromDb model.firestore )
+                    ( model, Cmd.batch [ getNavFromDb model.firestore, getFromDb model.firestore ] )
 
                 SearchAndRemoved userInput ->
                     ( { model | items = removeEverythingButsearched userInput (List.map identity model.items) }
@@ -410,8 +418,12 @@ update msg model =
 
                             else
                                 model.list ++ [ model.listInput ]
+
+                        dbNav =
+                            { title = model.listInput
+                            }
                     in
-                    ( { model | list = navs }, Cmd.none )
+                    ( { model | list = navs }, upsertNav model.firestore dbNav )
 
                 EditNav userInput ->
                     ( { model | listInput = userInput }, Cmd.none )
@@ -424,7 +436,15 @@ update msg model =
                     ( { model | items = Tuple.first editSelectedNav }, Tuple.second editSelectedNav )
 
                 DeleteNav title ->
-                    ( { model | list = List.filter (\name -> title /= name) model.list }, Cmd.none )
+                    let
+                        dbNav =
+                            { title = title
+                            }
+                    in
+                    ( { model | list = List.filter (\name -> title /= name) model.list }, deleteNav model.firestore dbNav )
+
+                NoOp ->
+                    ( model, Cmd.none )
 
         x =
             Debug.log "logging this" (Json.Encode.encode 0 (encoder newModel.items))
@@ -512,6 +532,18 @@ updated lst fs i func =
     )
 
 
+upsertNav : Firestore.Firestore -> DbNav -> Cmd Msg
+upsertNav fs n =
+    fs
+        |> Firestore.root
+        |> Firestore.collection "Navs"
+        |> Firestore.document n.title
+        |> Firestore.build
+        |> toTask
+        |> Task.andThen (Firestore.upsert (Codec.asDecoder codecNav) (Codec.asEncoder codecNav n))
+        |> Task.attempt (\_ -> NoOp)
+
+
 upsertBullet : Firestore.Firestore -> Bullet -> Cmd Msg
 upsertBullet f b =
     let
@@ -544,16 +576,16 @@ deleteBullet firestore bullet =
         |> Task.attempt DeleteFromDB
 
 
-deleteNav : Firestore.Firestore -> Nav -> Cmd Msg
+deleteNav : Firestore.Firestore -> DbNav -> Cmd Msg
 deleteNav firestore nav =
     firestore
         |> Firestore.root
-        |> Firestore.collection "Bullets"
-        |> Firestore.document nav
+        |> Firestore.collection "Navs"
+        |> Firestore.document nav.title
         |> Firestore.build
         |> toTask
         |> Task.andThen Firestore.delete
-        |> Task.attempt DeleteFromDB
+        |> Task.attempt (\_ -> NoOp)
 
 
 updateCheckedOff : Bool -> Bullet -> Bullet
@@ -1115,9 +1147,11 @@ codecBullet =
         |> Codec.build
 
 
-
--- codecNav : Codec.Codec Nav
--- codecNav =
+codecNav : Codec.Codec DbNav
+codecNav =
+    Codec.document DbNav
+        |> Codec.required "title" .title Codec.string
+        |> Codec.build
 
 
 codecDropDown : Codec.Field DropDownStatus
