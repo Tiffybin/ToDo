@@ -404,7 +404,6 @@ update msg model =
 
                 AddList ->
                     let
-                     
                         navs =
                             if List.member model.listInput model.list then
                                 model.list
@@ -719,8 +718,6 @@ view model =
             [ div [ class "d-flex mb-3" ]
                 [ input [ class "form-control me-3", placeholder "Write something", value model.userInput, onInput Change ] []
                 , button [ class "btn button", onClick AddBefore ] [ text "+" ]
-                , button [ class "btn button", onClick (SearchAndRemoved model.searchedString) ] [ text "Q" ]
-                , input [ class "form-control me-3", placeholder "Search", value model.searchedString, onInput Search ] []
                 ]
             ]
         , div [ class "d-flex justify-content-center" ]
@@ -744,11 +741,17 @@ viewSideBar model =
             ]
         , ul [ class "sidebar-nav" ]
             [ li [ class "nav-title" ] [ text "Navigation" ]
+            , div [ class "d-flex align-items-center" ]
+                [ button [ class "btn button", onClick (SearchAndRemoved model.searchedString) ] [ text "Q" ]
+                , input [ class "form-control me-3", placeholder "Search", value model.searchedString, onInput Search ] []
+                ]
             , li [ class "nav-item" ]
-                [ a [] [ text "Lists" ] ]
-            , button [ class "btn button", onClick AddList ] [ text "+" ]
-            , div []
-                [ input [ placeholder "Add a list", value model.listInput, onInput EditNav ] []
+                [ a [] [ text "My Lists" ] ]
+            , div [ class "d-flex align-items-center" ]
+                [ button [ class "btn button", onClick AddList ] [ text "+" ]
+                , div []
+                    [ input [ class "form-control me-3", placeholder "Add a list", value model.listInput, onInput EditNav ] []
+                    ]
                 ]
             , div []
                 [ ul [] (List.map (viewNav model) model.list)
