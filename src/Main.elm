@@ -110,6 +110,7 @@ type alias Bullet =
     , selectedMonth : String
     , nav : Nav
     , day : Int
+    , notes : String
     }
 
 
@@ -160,6 +161,7 @@ type Msg
     | DeleteNav String
     | GetNav (Result Firestore.Error (Firestore.Documents DbNav))
     | NoOp
+    | UpdateNotes Int String
 
 
 remove : Int -> List Bullet -> List Bullet
@@ -227,6 +229,7 @@ update msg model =
                             , dropdownStatus = Nothing
                             , nav = ""
                             , day = 0
+                            , notes = ""
                             }
                     in
                     ( { model
@@ -334,7 +337,7 @@ update msg model =
                                     in
                                     List.map (\dbNav -> dbNav.title) dbNavList
                       }
-                    , Cmd.none
+                    , getNavFromDb model.firestore
                     )
 
                 Upsert result ->
@@ -362,7 +365,7 @@ update msg model =
                             ( { model | items = model.items }, Cmd.none )
 
                 GetFromDB ->
-                    ( model, Cmd.batch [ getNavFromDb model.firestore, getFromDb model.firestore ] )
+                    ( model, getFromDb model.firestore )
 
                 SearchAndRemoved userInput ->
                     ( { model | items = removeEverythingButsearched userInput (List.map identity model.items) }
@@ -446,10 +449,22 @@ update msg model =
                 NoOp ->
                     ( model, Cmd.none )
 
+                UpdateNotes index userInput ->
+                    let
+                        editNotes =
+                            updated model.items model.firestore index (editModalsNotes userInput)
+                    in
+                    ( { model | items = Tuple.first editNotes }, Tuple.second editNotes )
+
         x =
             Debug.log "logging this" (Json.Encode.encode 0 (encoder newModel.items))
     in
     ( newModel, Cmd.batch [ save x, cmd ] )
+
+
+editModalsNotes : String -> Bullet -> Bullet
+editModalsNotes userInput bullet =
+    { bullet | notes = userInput }
 
 
 decrementSelectedDay : Bullet -> Bullet
@@ -675,8 +690,15 @@ viewModal model i b =
                                 [ div [ class "form-group" ]
                                     [ h5 [] [ text ("Created at " ++ hour ++ ":" ++ minutes ++ ":" ++ seconds) ]
                                     , label [ for "notes", class "col-form-label" ] [ text "Notes:" ]
-                                    , input [ type_ "text", class "form-control", id "notes" ] []
+                                    , input [ placeholder "Type your notes here...", value b.notes, type_ "text", class "form-control", id "notes", onInput (UpdateNotes i) ] []
                                     ]
+
+                                --  [ input
+                                --             [ placeholder "Type your notes here..."
+                                --             , value model.notes
+                                --             , onInput UpdateNotes
+                                --             ]
+                                --             []
                                 ]
                             ]
                         , h5 [] [ text "Time" ]
@@ -982,6 +1004,7 @@ encodeBullet b =
         , ( "selectedMonth", Json.Encode.string b.selectedMonth )
         , ( "nav", Json.Encode.string b.nav )
         , ( "day", Json.Encode.int b.day )
+        , ( "notes", Json.Encode.string b.notes )
         ]
 
 
@@ -1102,6 +1125,7 @@ decodeBullet =
         |> Json.Decode.Pipeline.required "selectedMonth" Decode.string
         |> Json.Decode.Pipeline.required "nav" Decode.string
         |> Json.Decode.Pipeline.required "day" Decode.int
+        |> Json.Decode.Pipeline.required "notes" Decode.string
 
 
 decodeTimeOfDay : Decode.Decoder TimeOfDay
@@ -1144,6 +1168,7 @@ codecBullet =
         |> Codec.required "selectedMonth" .selectedMonth Codec.string
         |> Codec.required "nav" .nav Codec.string
         |> Codec.required "day" .day Codec.int
+        |> Codec.required "notes" .notes Codec.string
         |> Codec.build
 
 
