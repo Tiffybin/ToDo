@@ -9,7 +9,7 @@ import Firestore.Config
 import Firestore.Options.List
 import Firestore.Types.Reference as Reference
 import Html exposing (..)
-import Html.Attributes exposing (attribute, checked, class, classList, disabled, for, href, id, name, placeholder, tabindex, type_, value)
+import Html.Attributes exposing (attribute, checked, class, classList, disabled, for, href, id, name, placeholder, style, tabindex, type_, value)
 import Html.Events exposing (onBlur, onClick, onFocus, onInput)
 import Html5.DragDrop
 import Iso8601 as Iso
@@ -32,8 +32,8 @@ main =
         }
 
 
-init : String -> ( Model, Cmd Msg )
-init user =
+init : String ->  ( Model, Cmd Msg )
+init user  =
     let
         firestore =
             Firestore.Config.new
@@ -42,7 +42,7 @@ init user =
                 }
                 |> Firestore.init
     in
-    ( { items = decoder user, userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing, list = [], listInput = "" }
+    ( { items = decoder user, userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing, list = decoderNav user, listInput = "", filterSelected = False }
     , Cmd.batch
         [ getZone
         , getFromDb firestore
@@ -70,6 +70,7 @@ type alias Model =
     , index : Maybe Int
     , list : List Nav
     , listInput : String
+    , filterSelected : Bool
     }
 
 
@@ -162,6 +163,7 @@ type Msg
     | GetNav (Result Firestore.Error (Firestore.Documents DbNav))
     | NoOp
     | UpdateNotes Int String
+    | FilterNav Nav
 
 
 remove : Int -> List Bullet -> List Bullet
@@ -171,7 +173,7 @@ remove i list =
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    if model.searchedString == "" then
+    if model.searchedString == "" && model.filterSelected == False then
         Time.every 10000 (always GetFromDB)
 
     else
@@ -369,7 +371,7 @@ update msg model =
 
                 SearchAndRemoved userInput ->
                     ( { model | items = removeEverythingButsearched userInput (List.map identity model.items) }
-                    , if userInput == "" then
+                    , if userInput == "" && model.filterSelected == False then
                         getFromDb model.firestore
 
                       else
@@ -415,7 +417,7 @@ update msg model =
 
                 AddList ->
                     let
-                        navs =
+                        nav =
                             if List.member model.listInput model.list then
                                 model.list
 
@@ -426,7 +428,7 @@ update msg model =
                             { title = model.listInput
                             }
                     in
-                    ( { model | list = navs }, upsertNav model.firestore dbNav )
+                    ( { model | list = nav }, upsertNav model.firestore dbNav )
 
                 EditNav userInput ->
                     ( { model | listInput = userInput }, Cmd.none )
@@ -456,10 +458,16 @@ update msg model =
                     in
                     ( { model | items = Tuple.first editNotes }, Tuple.second editNotes )
 
-        x =
+                FilterNav nav ->
+                    ( { model | items = filterNavs nav (List.map identity model.items), filterSelected = model.filterSelected }, Cmd.none )
+
+        bullets =
             Debug.log "logging this" (Json.Encode.encode 0 (encoder newModel.items))
+
+        navs =
+            Json.Encode.encode 0 (encoderNav newModel.list)
     in
-    ( newModel, Cmd.batch [ save x, cmd ] )
+    ( newModel, Cmd.batch [ save bullets, cmd, save navs ] )
 
 
 editModalsNotes : String -> Bullet -> Bullet
@@ -527,6 +535,11 @@ everythingButFocused listDB listLocal index =
 removeEverythingButsearched : String -> List Bullet -> List Bullet
 removeEverythingButsearched userString list =
     List.filter (\bullet -> String.contains userString bullet.title) list
+
+
+filterNavs : Nav -> List Bullet -> List Bullet
+filterNavs nav list =
+    List.filter (\bullet -> bullet.nav == nav) list
 
 
 updated : List Bullet -> Firestore.Firestore -> Int -> (Bullet -> Bullet) -> ( List Bullet, Cmd Msg )
@@ -910,9 +923,10 @@ viewBullet i model =
 viewNav : Model -> Nav -> Html Msg
 viewNav model nav =
     div [ class "d-flex justify-content-center" ]
-        [ input [ value nav, disabled True ] []
+        [ p [ style "margin-right" "10px" ] [ text (String.fromInt (List.length (List.filter (\bullet -> bullet.nav == nav) model.items))) ]
+        , input [ value nav, disabled True ] []
         , button [ class "btn button", onClick (DeleteNav nav) ] [ text "-" ]
-        , p [] [ text (String.fromInt (List.length (List.filter (\bullet -> bullet.nav == nav) model.items))) ]
+        , button [ class "btn button", onClick (FilterNav nav) ] [ text "^" ]
         ]
 
 
@@ -1096,6 +1110,14 @@ encodeDropDown dropDownStatus =
 decoder : String -> List Bullet
 decoder string =
     case Decode.decodeString decodeListBullets string of
+        Ok str ->
+            str
+
+        Err _ ->
+            []
+decoderNav: String -> List Nav
+decoderNav string = 
+     case Decode.decodeString decodeListNav string of
         Ok str ->
             str
 
