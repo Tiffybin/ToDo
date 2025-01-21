@@ -6,6 +6,7 @@ import Environment
 import Firestore
 import Firestore.Codec as Codec
 import Firestore.Config
+import Firestore.Internals.Encode.Types as EncodeTypes
 import Firestore.Options.List
 import Firestore.Types.Reference as Reference
 import Html exposing (..)
@@ -32,8 +33,8 @@ main =
         }
 
 
-init : String ->  ( Model, Cmd Msg )
-init user  =
+init : String -> ( Model, Cmd Msg )
+init user =
     let
         firestore =
             Firestore.Config.new
@@ -42,7 +43,7 @@ init user  =
                 }
                 |> Firestore.init
     in
-    ( { items = decoder user, userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing, list = decoderNav user, listInput = "", filterSelected = False }
+    ( { items = decoder user, userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing, list = decoderNav user, listInput = "", filterSelected = False, isInputNotClear = False }
     , Cmd.batch
         [ getZone
         , getFromDb firestore
@@ -71,6 +72,7 @@ type alias Model =
     , list : List Nav
     , listInput : String
     , filterSelected : Bool
+    , isInputNotClear : Bool
     }
 
 
@@ -428,7 +430,7 @@ update msg model =
                             { title = model.listInput
                             }
                     in
-                    ( { model | list = nav }, upsertNav model.firestore dbNav )
+                    ( { model | list = nav, isInputNotClear = not model.isInputNotClear }, upsertNav model.firestore dbNav )
 
                 EditNav userInput ->
                     ( { model | listInput = userInput }, Cmd.none )
@@ -705,13 +707,6 @@ viewModal model i b =
                                     , label [ for "notes", class "col-form-label" ] [ text "Notes:" ]
                                     , input [ placeholder "Type your notes here...", value b.notes, type_ "text", class "form-control", id "notes", onInput (UpdateNotes i) ] []
                                     ]
-
-                                --  [ input
-                                --             [ placeholder "Type your notes here..."
-                                --             , value model.notes
-                                --             , onInput UpdateNotes
-                                --             ]
-                                --             []
                                 ]
                             ]
                         , h5 [] [ text "Time" ]
@@ -755,7 +750,12 @@ viewModal model i b =
                         , h5 [] [ text "List" ]
                         , div [ class "dropdown" ]
                             [ button [ class "btn btn-secondary dropdown-toggle", type_ "button", id "dropdownMenuButton", attribute "data-bs-toggle" "dropdown" ]
-                                [ text b.nav ]
+                                (if List.member b.nav model.list then
+                                    [ text b.nav ]
+
+                                 else
+                                    [ text "" ]
+                                )
                             , div
                                 [ classList
                                     [ ( "dropdown-menu", True )
@@ -817,7 +817,17 @@ viewSideBar model =
             , div [ class "d-flex align-items-center" ]
                 [ button [ class "btn button", onClick AddList ] [ text "+" ]
                 , div []
-                    [ input [ class "form-control me-3", placeholder "Add a list", value model.listInput, onInput EditNav ] []
+                    [ input
+                        [ class "form-control me-3"
+                        , placeholder "Add a list"
+                        , if model.isInputNotClear then
+                            value ""
+
+                          else
+                            value model.listInput
+                        , onInput EditNav
+                        ]
+                        []
                     ]
                 ]
             , div []
@@ -1115,9 +1125,11 @@ decoder string =
 
         Err _ ->
             []
-decoderNav: String -> List Nav
-decoderNav string = 
-     case Decode.decodeString decodeListNav string of
+
+
+decoderNav : String -> List Nav
+decoderNav string =
+    case Decode.decodeString decodeListNav string of
         Ok str ->
             str
 
@@ -1201,7 +1213,7 @@ codecNav =
         |> Codec.build
 
 
-codecDropDown : Codec.Field DropDownStatus
+codecDropDown : Codec.Field DropDownStatus EncodeTypes.String
 codecDropDown =
     codecOneOf
         encodeDropDown
@@ -1211,7 +1223,7 @@ codecDropDown =
         ]
 
 
-codecTime : Codec.Field TimeOfDay
+codecTime : Codec.Field TimeOfDay EncodeTypes.String
 codecTime =
     codecOneOf
         encodeTimeOfDay
@@ -1222,7 +1234,7 @@ codecTime =
         ]
 
 
-codecStatus : Codec.Field Status
+codecStatus : Codec.Field Status EncodeTypes.String
 codecStatus =
     codecOneOf
         encodeStatus
@@ -1233,7 +1245,7 @@ codecStatus =
         ]
 
 
-codecOneOf : (a -> b) -> Codec.Field b -> List ( b, a ) -> Codec.Field a
+codecOneOf : (a -> b) -> Codec.Field b EncodeTypes.Null -> List ( b, a ) -> Codec.Field a EncodeTypes.Null
 codecOneOf show codec =
     let
         tryCodec ( expected, wouldProduce ) restCodec =
