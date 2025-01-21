@@ -23,7 +23,11 @@ import Time
 import Tuple
 
 
-main : Program String Model Msg
+main :
+    Program
+        Flags
+        Model
+        Msg
 main =
     Browser.element
         { init = init
@@ -33,7 +37,9 @@ main =
         }
 
 
-init : String -> ( Model, Cmd Msg )
+init :
+    Flags
+    -> ( Model, Cmd Msg )
 init user =
     let
         firestore =
@@ -41,12 +47,13 @@ init user =
                 { apiKey = Environment.apiKey
                 , project = Environment.projectId
                 }
+                |> Firestore.Config.withAuthorization user.token
                 |> Firestore.init
     in
-    ( { items = decoder user, userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing, list = decoderNav user, listInput = "", filterSelected = False, isInputNotClear = False }
+    ( { items = [], userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing, list = [], listInput = "", filterSelected = False, isInputNotClear = False, users = { userId = user.userId, token = user.token } }
     , Cmd.batch
         [ getZone
-        , getFromDb firestore
+        , getFromDb user firestore
         ]
     )
 
@@ -61,6 +68,10 @@ toTask result =
             Task.succeed r
 
 
+type alias Flags =
+    { userId : String, token : String }
+
+
 type alias Model =
     { items : List Bullet
     , userInput : String
@@ -73,6 +84,7 @@ type alias Model =
     , listInput : String
     , filterSelected : Bool
     , isInputNotClear : Bool
+    , users : Flags
     }
 
 
@@ -182,11 +194,13 @@ subscriptions model =
         Sub.none
 
 
-getFromDb : Firestore.Firestore -> Cmd Msg
-getFromDb firestore =
+getFromDb : Flags -> Firestore.Firestore -> Cmd Msg
+getFromDb user firestore =
     firestore
         |> Firestore.root
-        |> Firestore.collection "Bullets"
+        |> Firestore.collection "Users"
+        |> Firestore.document user.userId
+        |> Firestore.subCollection "Bullets"
         |> Firestore.build
         |> toTask
         |> Task.andThen (Firestore.list (Codec.asDecoder codecBullet) Firestore.Options.List.default)
@@ -216,7 +230,7 @@ update msg model =
                     in
                     case bullet of
                         Just b ->
-                            ( { model | items = remove i model.items }, deleteBullet model.firestore b )
+                            ( { model | items = remove i model.items }, deleteBullet model model.firestore b )
 
                         Nothing ->
                             ( { model | items = remove i model.items }, Cmd.none )
@@ -240,7 +254,8 @@ update msg model =
                         | items =
                             bullet :: model.items
                       }
-                    , upsertBullet model.firestore
+                    , upsertBullet model.users
+                        model.firestore
                         bullet
                     )
 
@@ -253,7 +268,7 @@ update msg model =
                 Edit i newString ->
                     let
                         editString =
-                            updated model.items model.firestore i (editBullet newString)
+                            updated model model.items model.firestore i (editBullet newString)
                     in
                     ( { model | items = Tuple.first editString }, Tuple.second editString )
 
@@ -278,7 +293,7 @@ update msg model =
                 Time i timePosix ->
                     let
                         editTimePosix =
-                            updated model.items model.firestore i (updateTime timePosix)
+                            updated model model.items model.firestore i (updateTime timePosix)
                     in
                     ( { model | items = Tuple.first editTimePosix }, Tuple.second editTimePosix )
 
@@ -288,21 +303,21 @@ update msg model =
                 UpdateTimeOfDay i timeOfDay ->
                     let
                         editTimeOfDay =
-                            updated model.items model.firestore i (updateTimeOfDay (Just timeOfDay))
+                            updated model model.items model.firestore i (updateTimeOfDay (Just timeOfDay))
                     in
                     ( { model | items = Tuple.first editTimeOfDay }, Tuple.second editTimeOfDay )
 
                 Progress i status ->
                     let
                         editStatus =
-                            updated model.items model.firestore i (updateProgress (Just status))
+                            updated model model.items model.firestore i (updateProgress (Just status))
                     in
                     ( { model | items = Tuple.first editStatus }, Tuple.second editStatus )
 
                 CheckedOff i checked ->
                     let
                         editChecked =
-                            updated model.items model.firestore i (updateCheckedOff checked)
+                            updated model model.items model.firestore i (updateCheckedOff checked)
                     in
                     ( { model | items = Tuple.first editChecked }, Tuple.second editChecked )
 
@@ -369,12 +384,12 @@ update msg model =
                             ( { model | items = model.items }, Cmd.none )
 
                 GetFromDB ->
-                    ( model, getFromDb model.firestore )
+                    ( model, getFromDb model.users model.firestore )
 
                 SearchAndRemoved userInput ->
                     ( { model | items = removeEverythingButsearched userInput (List.map identity model.items) }
                     , if userInput == "" && model.filterSelected == False then
-                        getFromDb model.firestore
+                        getFromDb model.users model.firestore
 
                       else
                         Cmd.none
@@ -396,21 +411,21 @@ update msg model =
                 SelectedMonth index month ->
                     let
                         editSelectedMonth =
-                            updated model.items model.firestore index (updateSelectedMonth month)
+                            updated model model.items model.firestore index (updateSelectedMonth month)
                     in
                     ( { model | items = Tuple.first editSelectedMonth }, Tuple.second editSelectedMonth )
 
                 IncrementDay index ->
                     let
                         editDay =
-                            updated model.items model.firestore index incrementSelectedDay
+                            updated model model.items model.firestore index incrementSelectedDay
                     in
                     ( { model | items = Tuple.first editDay }, Tuple.second editDay )
 
                 DecrementDay index ->
                     let
                         editDay =
-                            updated model.items model.firestore index decrementSelectedDay
+                            updated model model.items model.firestore index decrementSelectedDay
                     in
                     ( { model | items = Tuple.first editDay }, Tuple.second editDay )
 
@@ -438,7 +453,7 @@ update msg model =
                 SelectedNav index nav ->
                     let
                         editSelectedNav =
-                            updated model.items model.firestore index (updateSelectedNav nav)
+                            updated model model.items model.firestore index (updateSelectedNav nav)
                     in
                     ( { model | items = Tuple.first editSelectedNav }, Tuple.second editSelectedNav )
 
@@ -456,7 +471,7 @@ update msg model =
                 UpdateNotes index userInput ->
                     let
                         editNotes =
-                            updated model.items model.firestore index (editModalsNotes userInput)
+                            updated model model.items model.firestore index (editModalsNotes userInput)
                     in
                     ( { model | items = Tuple.first editNotes }, Tuple.second editNotes )
 
@@ -544,8 +559,8 @@ filterNavs nav list =
     List.filter (\bullet -> bullet.nav == nav) list
 
 
-updated : List Bullet -> Firestore.Firestore -> Int -> (Bullet -> Bullet) -> ( List Bullet, Cmd Msg )
-updated lst fs i func =
+updated : Model -> List Bullet -> Firestore.Firestore -> Int -> (Bullet -> Bullet) -> ( List Bullet, Cmd Msg )
+updated model lst fs i func =
     let
         newItems =
             List.Extra.updateAt i func lst
@@ -555,7 +570,7 @@ updated lst fs i func =
         List.Extra.getAt i newItems
       of
         Just bullet ->
-            upsertBullet fs bullet
+            upsertBullet model.users fs bullet
 
         Nothing ->
             Cmd.none
@@ -574,15 +589,17 @@ upsertNav fs n =
         |> Task.attempt (\_ -> NoOp)
 
 
-upsertBullet : Firestore.Firestore -> Bullet -> Cmd Msg
-upsertBullet f b =
+upsertBullet : Flags -> Firestore.Firestore -> Bullet -> Cmd Msg
+upsertBullet user f b =
     let
         time =
             Iso.fromTime b.time
     in
     f
         |> Firestore.root
-        |> Firestore.collection "Bullets"
+        |> Firestore.collection "Users"
+        |> Firestore.document user.userId
+        |> Firestore.subCollection "Bullets"
         |> Firestore.document time
         |> Firestore.build
         |> toTask
@@ -590,15 +607,17 @@ upsertBullet f b =
         |> Task.attempt Upsert
 
 
-deleteBullet : Firestore.Firestore -> Bullet -> Cmd Msg
-deleteBullet firestore bullet =
+deleteBullet : Model -> Firestore.Firestore -> Bullet -> Cmd Msg
+deleteBullet model firestore bullet =
     let
         time =
             Iso.fromTime bullet.time
     in
     firestore
         |> Firestore.root
-        |> Firestore.collection "Bullets"
+        |> Firestore.collection "Users"
+        |> Firestore.document model.users.userId
+        |> Firestore.subCollection "Bullets"
         |> Firestore.document time
         |> Firestore.build
         |> toTask

@@ -40,7 +40,7 @@
 		const authInstance = getAuth(app);
 
 
-		onAuthStateChanged(authInstance, (user) => {
+		onAuthStateChanged(authInstance, async (user) => {
 
 			if (!user) {
 				const uiConfig = {
@@ -62,19 +62,19 @@
 
 			} else {
 				var app2 = Elm.Main.init({
-					flags: localStorage.getItem("saved") || "",
+					flags: { userId: user.uid, token: await user.getIdToken() },
 					node: document.getElementById("elm-app-is-loaded-here")
 				});
 				app2.ports.save.subscribe(function (message) {
 					localStorage.setItem("saved", message);
 				});
-				app2.ports.signout.subscribe(function() {
+				app2.ports.signout.subscribe(function () {
 					authInstance.signOut();
 					location.reload();
 				});
 
 
-				
+
 			}
 		})
 
