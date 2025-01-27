@@ -50,10 +50,11 @@ init user =
                 |> Firestore.Config.withAuthorization user.token
                 |> Firestore.init
     in
-    ( { items = [], userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing, list = [], listInput = "", filterSelected = False, isInputNotClear = False, users = { userId = user.userId, token = user.token } }
+    ( { items = [], userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing, list = [], listInput = "", filterSelected = False, users = { userId = user.userId, token = user.token } }
     , Cmd.batch
         [ getZone
         , getFromDb user firestore
+        , getNavFromDb user firestore
         ]
     )
 
@@ -83,7 +84,6 @@ type alias Model =
     , list : List Nav
     , listInput : String
     , filterSelected : Bool
-    , isInputNotClear : Bool
     , users : Flags
     }
 
@@ -180,9 +180,9 @@ type Msg
     | FilterNav Nav
 
 
-remove : Int -> List Bullet -> List Bullet
-remove i list =
-    List.Extra.removeAt i list
+
+-- DB Things
+--go back here
 
 
 subscriptions : Model -> Sub Msg
@@ -207,15 +207,81 @@ getFromDb user firestore =
         |> Task.attempt Get
 
 
-getNavFromDb : Firestore.Firestore -> Cmd Msg
-getNavFromDb firestore =
+getNavFromDb : Flags -> Firestore.Firestore -> Cmd Msg
+getNavFromDb user firestore =
     firestore
         |> Firestore.root
-        |> Firestore.collection "Navs"
+        |> Firestore.collection "Users"
+        |> Firestore.document user.userId
+        |> Firestore.subCollection "Navs"
         |> Firestore.build
         |> toTask
         |> Task.andThen (Firestore.list (Codec.asDecoder codecNav) Firestore.Options.List.default)
         |> Task.attempt GetNav
+
+
+upsertNav : Flags -> Firestore.Firestore -> DbNav -> Cmd Msg
+upsertNav user fs n =
+    fs
+        |> Firestore.root
+        |> Firestore.collection "Users"
+        |> Firestore.document user.userId
+        |> Firestore.subCollection "Navs"
+        |> Firestore.document n.title
+        |> Firestore.build
+        |> toTask
+        |> Task.andThen (Firestore.upsert (Codec.asDecoder codecNav) (Codec.asEncoder codecNav n))
+        |> Task.attempt (\_ -> NoOp)
+
+
+upsertBullet : Flags -> Firestore.Firestore -> Bullet -> Cmd Msg
+upsertBullet user f b =
+    let
+        time =
+            Iso.fromTime b.time
+    in
+    f
+        |> Firestore.root
+        |> Firestore.collection "Users"
+        |> Firestore.document user.userId
+        |> Firestore.subCollection "Bullets"
+        |> Firestore.document time
+        |> Firestore.build
+        |> toTask
+        |> Task.andThen (Firestore.upsert (Codec.asDecoder codecBullet) (Codec.asEncoder codecBullet b))
+        |> Task.attempt Upsert
+
+
+deleteBullet : Model -> Firestore.Firestore -> Bullet -> Cmd Msg
+deleteBullet model firestore bullet =
+    let
+        time =
+            Iso.fromTime bullet.time
+    in
+    firestore
+        |> Firestore.root
+        |> Firestore.collection "Users"
+        |> Firestore.document model.users.userId
+        |> Firestore.subCollection "Bullets"
+        |> Firestore.document time
+        |> Firestore.build
+        |> toTask
+        |> Task.andThen Firestore.delete
+        |> Task.attempt DeleteFromDB
+
+
+deleteNav : Model -> Firestore.Firestore -> DbNav -> Cmd Msg
+deleteNav model firestore nav =
+    firestore
+        |> Firestore.root
+        |> Firestore.collection "Users"
+        |> Firestore.document model.users.userId
+        |> Firestore.subCollection "Navs"
+        |> Firestore.document nav.title
+        |> Firestore.build
+        |> toTask
+        |> Task.andThen Firestore.delete
+        |> Task.attempt (\_ -> NoOp)
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -356,7 +422,7 @@ update msg model =
                                     in
                                     List.map (\dbNav -> dbNav.title) dbNavList
                       }
-                    , getNavFromDb model.firestore
+                    , getNavFromDb model.users model.firestore
                     )
 
                 Upsert result ->
@@ -445,7 +511,7 @@ update msg model =
                             { title = model.listInput
                             }
                     in
-                    ( { model | list = nav, isInputNotClear = not model.isInputNotClear }, upsertNav model.firestore dbNav )
+                    ( { model | list = nav, listInput = "" }, upsertNav model.users model.firestore dbNav )
 
                 EditNav userInput ->
                     ( { model | listInput = userInput }, Cmd.none )
@@ -463,7 +529,7 @@ update msg model =
                             { title = title
                             }
                     in
-                    ( { model | list = List.filter (\name -> title /= name) model.list }, deleteNav model.firestore dbNav )
+                    ( { model | list = List.filter (\name -> title /= name) model.list }, deleteNav model model.firestore dbNav )
 
                 NoOp ->
                     ( model, Cmd.none )
@@ -476,7 +542,7 @@ update msg model =
                     ( { model | items = Tuple.first editNotes }, Tuple.second editNotes )
 
                 FilterNav nav ->
-                    ( { model | items = filterNavs nav (List.map identity model.items), filterSelected = model.filterSelected }, Cmd.none )
+                    ( { model | items = filterNavs nav model.items }, Cmd.none )
 
         bullets =
             Debug.log "logging this" (Json.Encode.encode 0 (encoder newModel.items))
@@ -485,6 +551,11 @@ update msg model =
             Json.Encode.encode 0 (encoderNav newModel.list)
     in
     ( newModel, Cmd.batch [ save bullets, cmd, save navs ] )
+
+
+remove : Int -> List Bullet -> List Bullet
+remove i list =
+    List.Extra.removeAt i list
 
 
 editModalsNotes : String -> Bullet -> Bullet
@@ -575,66 +646,6 @@ updated model lst fs i func =
         Nothing ->
             Cmd.none
     )
-
-
-upsertNav : Firestore.Firestore -> DbNav -> Cmd Msg
-upsertNav fs n =
-    fs
-        |> Firestore.root
-        |> Firestore.collection "Navs"
-        |> Firestore.document n.title
-        |> Firestore.build
-        |> toTask
-        |> Task.andThen (Firestore.upsert (Codec.asDecoder codecNav) (Codec.asEncoder codecNav n))
-        |> Task.attempt (\_ -> NoOp)
-
-
-upsertBullet : Flags -> Firestore.Firestore -> Bullet -> Cmd Msg
-upsertBullet user f b =
-    let
-        time =
-            Iso.fromTime b.time
-    in
-    f
-        |> Firestore.root
-        |> Firestore.collection "Users"
-        |> Firestore.document user.userId
-        |> Firestore.subCollection "Bullets"
-        |> Firestore.document time
-        |> Firestore.build
-        |> toTask
-        |> Task.andThen (Firestore.upsert (Codec.asDecoder codecBullet) (Codec.asEncoder codecBullet b))
-        |> Task.attempt Upsert
-
-
-deleteBullet : Model -> Firestore.Firestore -> Bullet -> Cmd Msg
-deleteBullet model firestore bullet =
-    let
-        time =
-            Iso.fromTime bullet.time
-    in
-    firestore
-        |> Firestore.root
-        |> Firestore.collection "Users"
-        |> Firestore.document model.users.userId
-        |> Firestore.subCollection "Bullets"
-        |> Firestore.document time
-        |> Firestore.build
-        |> toTask
-        |> Task.andThen Firestore.delete
-        |> Task.attempt DeleteFromDB
-
-
-deleteNav : Firestore.Firestore -> DbNav -> Cmd Msg
-deleteNav firestore nav =
-    firestore
-        |> Firestore.root
-        |> Firestore.collection "Navs"
-        |> Firestore.document nav.title
-        |> Firestore.build
-        |> toTask
-        |> Task.andThen Firestore.delete
-        |> Task.attempt (\_ -> NoOp)
 
 
 updateCheckedOff : Bool -> Bullet -> Bullet
@@ -839,11 +850,7 @@ viewSideBar model =
                     [ input
                         [ class "form-control me-3"
                         , placeholder "Add a list"
-                        , if model.isInputNotClear then
-                            value ""
-
-                          else
-                            value model.listInput
+                        , value model.listInput
                         , onInput EditNav
                         ]
                         []

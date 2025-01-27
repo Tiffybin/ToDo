@@ -19,7 +19,6 @@
             "norpan/elm-html5-drag-drop": "3.1.4",
             "IzumiSy/elm-typed": "4.1.0",
             "rtfeldman/elm-iso8601-date-strings": "1.1.4"
-            
         },
         "indirect": {
             "elm/bytes": "1.0.8",
