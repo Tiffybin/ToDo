@@ -31,7 +31,7 @@ main :
 main =
     Browser.element
         { init = init
-        , subscriptions = subscriptions
+        , subscriptions = \_ -> Sub.none
         , update = update
         , view = view
         }
@@ -50,7 +50,7 @@ init user =
                 |> Firestore.Config.withAuthorization user.token
                 |> Firestore.init
     in
-    ( { items = [], userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing, list = [], listInput = "", filterSelected = False, users = { userId = user.userId, token = user.token } }
+    ( { items = [], userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing, list = [], listInput = "", filterSelected = False, users = { userId = user.userId, token = user.token }, shouldPopup= False }
     , Cmd.batch
         [ getZone
         , getFromDb user firestore
@@ -85,6 +85,7 @@ type alias Model =
     , listInput : String
     , filterSelected : Bool
     , users : Flags
+    , shouldPopup : Bool
     }
 
 
@@ -181,8 +182,7 @@ type Msg
 
 
 
--- DB Things
---go back here
+
 
 
 subscriptions : Model -> Sub Msg
@@ -450,7 +450,7 @@ update msg model =
                             ( { model | items = model.items }, Cmd.none )
 
                 GetFromDB ->
-                    ( model, getFromDb model.users model.firestore )
+                    ( model, Cmd.batch [ getNavFromDb model.users model.firestore, getFromDb model.users model.firestore ] )
 
                 SearchAndRemoved userInput ->
                     ( { model | items = removeEverythingButsearched userInput (List.map identity model.items) }
@@ -502,16 +502,17 @@ update msg model =
                     let
                         nav =
                             if List.member model.listInput model.list then
-                                model.list
+                                (model.list, updatePopUpStatus model True)
 
                             else
-                                model.list ++ [ model.listInput ]
+                                (model.list ++ [ model.listInput ], updatePopUpStatus model False)
 
+                    
                         dbNav =
                             { title = model.listInput
                             }
                     in
-                    ( { model | list = nav, listInput = "" }, upsertNav model.users model.firestore dbNav )
+                    ( { model | list = Tuple.first nav, listInput = ""  }, upsertNav model.users model.firestore dbNav )
 
                 EditNav userInput ->
                     ( { model | listInput = userInput }, Cmd.none )
@@ -551,6 +552,10 @@ update msg model =
             Json.Encode.encode 0 (encoderNav newModel.list)
     in
     ( newModel, Cmd.batch [ save bullets, cmd, save navs ] )
+
+updatePopUpStatus : Model -> Bool -> Model
+updatePopUpStatus  model status = 
+    {model | shouldPopup = status}
 
 
 remove : Int -> List Bullet -> List Bullet
@@ -855,6 +860,7 @@ viewSideBar model =
                         ]
                         []
                     ]
+                , viewAlert model
                 ]
             , div []
                 [ ul [] (List.map (viewNav model) model.list)
@@ -888,6 +894,17 @@ checkTime b i str timeOfDay =
             ]
             []
         ]
+
+
+viewAlert : Model -> Html Msg
+viewAlert model =
+    div [ class "alert alert-warning alert-dismissible fade show" ]
+        [ text
+            "Error. You cannot have multiple lists of the same name"
+        , button[type_ "button", class "btn-close", attribute "data-bs-dismiss" "alert" ][]
+        ]
+
+
 
 
 checkStatus : Bullet -> Int -> String -> Status -> Html Msg
@@ -954,6 +971,92 @@ viewBullet i model =
 
         Nothing ->
             text "No bullet"
+
+
+
+-- dueSoon: Model -> Bullet -> (Bool, Bool) 
+-- dueSoon model bullet = 
+--      let
+--         maybeZone =
+--             model.zone
+--         sameMonth = True
+--         closeDays = True 
+--     in
+--     case maybeZone of
+--         Just zone ->
+--             let
+--                 day =
+--                      (Time.toWeekday zone bullet.time)
+
+--                 month =
+--                     (Time.toMonth zone bullet.time)
+
+            
+--             in
+--                 case monthAndDay of 
+--                    January -> 
+--                         let 
+--                             stringDay = "January"
+--                         in 
+--                             if (stringDay == bullet.selectedMonth) then 
+--                                 sameMonth 
+--                             else 
+--                                 not sameMonth
+--                     Monday -> 
+--                         let 
+--                             intDay = 1
+--                         in 
+--                             if (intDay <= bullet.day) then 
+--                                 closeDays 
+--                             else 
+--                                 not closeDays
+                        
+
+
+
+
+                  
+
+            --if months are the smae and the dates are <=7 away it is due soon 
+            --if not it isnt 
+            
+
+        --     True 
+        -- Nothing -> 
+        --     False
+
+
+
+
+    
+--  let
+--         maybeZone =
+--             model.zone
+--     in
+--     case maybeZone of
+--         Just zone ->
+--             let
+--                 hour =
+--                     standardTime (Time.toHour zone b.time)
+
+--                 minutes =
+--                     standardTime (Time.toMinute zone b.time)
+
+--                 seconds =
+--                     standardTime (Time.toSecond zone b.time)
+
+    -- type alias Bullet =
+    -- { title : String
+    -- , time : Time.Posix
+    -- , timeOfDay : Maybe TimeOfDay
+    -- , progress : Maybe Status
+    -- , checked : Bool
+    -- , dropdownStatus : Maybe DropDownStatus
+    -- , selectedMonth : String
+    -- , nav : Nav
+    -- , day : Int
+    -- , notes : String
+    -- }
 
 
 viewNav : Model -> Nav -> Html Msg
