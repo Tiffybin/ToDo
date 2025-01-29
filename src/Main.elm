@@ -23,6 +23,10 @@ import Time
 import Tuple
 
 
+
+-- import datetimepicker
+
+
 main :
     Program
         Flags
@@ -31,7 +35,7 @@ main :
 main =
     Browser.element
         { init = init
-        , subscriptions = \_ -> Sub.none
+        , subscriptions = subscriptions
         , update = update
         , view = view
         }
@@ -50,7 +54,7 @@ init user =
                 |> Firestore.Config.withAuthorization user.token
                 |> Firestore.init
     in
-    ( { items = [], userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing, list = [], listInput = "", filterSelected = False, users = { userId = user.userId, token = user.token }, shouldPopup= False }
+    ( { items = [], userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing, list = [], listInput = "", filterSelected = False, users = { userId = user.userId, token = user.token }, shouldPopup = False, navSortingWith = Nothing }
     , Cmd.batch
         [ getZone
         , getFromDb user firestore
@@ -86,6 +90,7 @@ type alias Model =
     , filterSelected : Bool
     , users : Flags
     , shouldPopup : Bool
+    , navSortingWith : Maybe Nav
     }
 
 
@@ -178,11 +183,7 @@ type Msg
     | GetNav (Result Firestore.Error (Firestore.Documents DbNav))
     | NoOp
     | UpdateNotes Int String
-    | FilterNav Nav
-
-
-
-
+    | SortingNavWith (Maybe Nav)
 
 
 subscriptions : Model -> Sub Msg
@@ -422,7 +423,7 @@ update msg model =
                                     in
                                     List.map (\dbNav -> dbNav.title) dbNavList
                       }
-                    , getNavFromDb model.users model.firestore
+                    , Cmd.none
                     )
 
                 Upsert result ->
@@ -502,17 +503,16 @@ update msg model =
                     let
                         nav =
                             if List.member model.listInput model.list then
-                                (model.list, updatePopUpStatus model True)
+                                ( model.list, updatePopUpStatus model True )
 
                             else
-                                (model.list ++ [ model.listInput ], updatePopUpStatus model False)
+                                ( model.list ++ [ model.listInput ], updatePopUpStatus model False )
 
-                    
                         dbNav =
                             { title = model.listInput
                             }
                     in
-                    ( { model | list = Tuple.first nav, listInput = ""  }, upsertNav model.users model.firestore dbNav )
+                    ( { model | list = Tuple.first nav, listInput = "" }, upsertNav model.users model.firestore dbNav )
 
                 EditNav userInput ->
                     ( { model | listInput = userInput }, Cmd.none )
@@ -542,8 +542,8 @@ update msg model =
                     in
                     ( { model | items = Tuple.first editNotes }, Tuple.second editNotes )
 
-                FilterNav nav ->
-                    ( { model | items = filterNavs nav model.items }, Cmd.none )
+                SortingNavWith nav ->
+                    ( { model | navSortingWith = nav }, Cmd.none )
 
         bullets =
             Debug.log "logging this" (Json.Encode.encode 0 (encoder newModel.items))
@@ -553,9 +553,10 @@ update msg model =
     in
     ( newModel, Cmd.batch [ save bullets, cmd, save navs ] )
 
+
 updatePopUpStatus : Model -> Bool -> Model
-updatePopUpStatus  model status = 
-    {model | shouldPopup = status}
+updatePopUpStatus model status =
+    { model | shouldPopup = status }
 
 
 remove : Int -> List Bullet -> List Bullet
@@ -813,6 +814,15 @@ viewModal model i b =
 
 view : Model -> Html Msg
 view model =
+    let
+        filteredItems =
+            case model.navSortingWith of
+                Just nav ->
+                    filterNavs nav model.items
+
+                Nothing ->
+                    model.items
+    in
     div [ class "background" ]
         [ p [ class "text-center fs-1 fw-bold font-monospace text-title " ] [ text "To-Do List" ]
         , div [] []
@@ -824,8 +834,8 @@ view model =
             ]
         , div [ class "d-flex justify-content-center" ]
             [ ul [ class "list-unstyled flex-column align-items-center" ]
-                (List.Extra.interweave (List.Extra.initialize (List.length model.items + 1) viewDropZone)
-                    (List.indexedMap (\i _ -> viewBullet i model) model.items)
+                (List.Extra.interweave (List.Extra.initialize (List.length filteredItems + 1) viewDropZone)
+                    (List.indexedMap (\i _ -> viewBullet i model) filteredItems)
                 )
             ]
         , div [ class "fixed-bottom" ] [ button [ class "btn button", onClick SignOut ] [ text "Sign Out" ] ]
@@ -901,10 +911,8 @@ viewAlert model =
     div [ class "alert alert-warning alert-dismissible fade show" ]
         [ text
             "Error. You cannot have multiple lists of the same name"
-        , button[type_ "button", class "btn-close", attribute "data-bs-dismiss" "alert" ][]
+        , button [ type_ "button", class "btn-close", attribute "data-bs-dismiss" "alert" ] []
         ]
-
-
 
 
 checkStatus : Bullet -> Int -> String -> Status -> Html Msg
@@ -974,89 +982,13 @@ viewBullet i model =
 
 
 
--- dueSoon: Model -> Bullet -> (Bool, Bool) 
--- dueSoon model bullet = 
---      let
---         maybeZone =
---             model.zone
---         sameMonth = True
---         closeDays = True 
+-- dueSoon : Model -> Bullet -> Bool
+-- dueSoon model bullet =
+--     let
+--         currentTime =
+--             Time.posixToMillis Time.now
 --     in
---     case maybeZone of
---         Just zone ->
---             let
---                 day =
---                      (Time.toWeekday zone bullet.time)
-
---                 month =
---                     (Time.toMonth zone bullet.time)
-
-            
---             in
---                 case monthAndDay of 
---                    January -> 
---                         let 
---                             stringDay = "January"
---                         in 
---                             if (stringDay == bullet.selectedMonth) then 
---                                 sameMonth 
---                             else 
---                                 not sameMonth
---                     Monday -> 
---                         let 
---                             intDay = 1
---                         in 
---                             if (intDay <= bullet.day) then 
---                                 closeDays 
---                             else 
---                                 not closeDays
-                        
-
-
-
-
-                  
-
-            --if months are the smae and the dates are <=7 away it is due soon 
-            --if not it isnt 
-            
-
-        --     True 
-        -- Nothing -> 
-        --     False
-
-
-
-
-    
---  let
---         maybeZone =
---             model.zone
---     in
---     case maybeZone of
---         Just zone ->
---             let
---                 hour =
---                     standardTime (Time.toHour zone b.time)
-
---                 minutes =
---                     standardTime (Time.toMinute zone b.time)
-
---                 seconds =
---                     standardTime (Time.toSecond zone b.time)
-
-    -- type alias Bullet =
-    -- { title : String
-    -- , time : Time.Posix
-    -- , timeOfDay : Maybe TimeOfDay
-    -- , progress : Maybe Status
-    -- , checked : Bool
-    -- , dropdownStatus : Maybe DropDownStatus
-    -- , selectedMonth : String
-    -- , nav : Nav
-    -- , day : Int
-    -- , notes : String
-    -- }
+--         if ()
 
 
 viewNav : Model -> Nav -> Html Msg
@@ -1065,7 +997,7 @@ viewNav model nav =
         [ p [ style "margin-right" "10px" ] [ text (String.fromInt (List.length (List.filter (\bullet -> bullet.nav == nav) model.items))) ]
         , input [ value nav, disabled True ] []
         , button [ class "btn button", onClick (DeleteNav nav) ] [ text "-" ]
-        , button [ class "btn button", onClick (FilterNav nav) ] [ text "^" ]
+        , button [ class "btn button", onClick (SortingNavWith (Just nav)) ] [ text "^" ]
         ]
 
 
