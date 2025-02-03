@@ -1,14 +1,14 @@
 port module Main exposing (..)
 
 import Browser
-import Dict
+import Date
+import DatePicker.Settings as Settings
 import Environment
 import Firestore
 import Firestore.Codec as Codec
 import Firestore.Config
 import Firestore.Internals.Encode.Types as EncodeTypes
 import Firestore.Options.List
-import Firestore.Types.Reference as Reference
 import Html exposing (..)
 import Html.Attributes exposing (attribute, checked, class, classList, disabled, for, href, id, name, placeholder, style, tabindex, type_, value)
 import Html.Events exposing (onBlur, onClick, onFocus, onInput)
@@ -18,13 +18,10 @@ import Json.Decode as Decode
 import Json.Decode.Pipeline
 import Json.Encode
 import List.Extra
+import SingleDatePicker as DP
 import Task
 import Time
 import Tuple
-
-
-
--- import datetimepicker
 
 
 main :
@@ -54,7 +51,7 @@ init user =
                 |> Firestore.Config.withAuthorization user.token
                 |> Firestore.init
     in
-    ( { items = [], userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing, list = [], listInput = "", filterSelected = False, users = { userId = user.userId, token = user.token }, shouldPopup = False, navSortingWith = Nothing }
+    ( { items = [], userInput = "", dragDrop = Html5.DragDrop.init, zone = Maybe.Nothing, firestore = firestore, searchedString = "", index = Maybe.Nothing, list = [], listInput = "", filterSelected = False, users = { userId = user.userId, token = user.token }, shouldPopup = False, navSortingWith = Nothing, currentTime = Time.millisToPosix 0 }
     , Cmd.batch
         [ getZone
         , getFromDb user firestore
@@ -91,6 +88,7 @@ type alias Model =
     , users : Flags
     , shouldPopup : Bool
     , navSortingWith : Maybe Nav
+    , currentTime : Time.Posix
     }
 
 
@@ -100,17 +98,6 @@ type alias Nav =
 
 type alias DbNav =
     { title : String }
-
-
-type alias Document =
-    { reference : Reference.Reference
-    , integer : Int
-    , string : String
-    , list : List String
-    , map : Dict.Dict String String
-    , boolean : Bool
-    , nullable : Maybe String
-    }
 
 
 type alias DragId =
@@ -132,6 +119,8 @@ type alias Bullet =
     , nav : Nav
     , day : Int
     , notes : String
+    , picker : DP.DatePicker Msg
+    , pickedTime : Maybe Time.Posix
     }
 
 
@@ -184,6 +173,8 @@ type Msg
     | NoOp
     | UpdateNotes Int String
     | SortingNavWith (Maybe Nav)
+    | UpdatePicker Int DP.Msg
+    | OpenPicker Int
 
 
 subscriptions : Model -> Sub Msg
@@ -315,6 +306,10 @@ update msg model =
                             , nav = ""
                             , day = 0
                             , notes = ""
+                            , picker = DP.init (UpdatePicker 0)
+
+                            --not sure if it should be 0
+                            , pickedTime = Nothing
                             }
                     in
                     ( { model
@@ -545,6 +540,30 @@ update msg model =
                 SortingNavWith nav ->
                     ( { model | navSortingWith = nav }, Cmd.none )
 
+                UpdatePicker index dpMsg ->
+                    case model.zone of
+                        Just zone ->
+                            let
+                                ( newItems, newMsg ) =
+                                    updated model model.items model.firestore index (updateDatePicker dpMsg zone)
+                            in
+                            ( { model | items = newItems }, newMsg )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                OpenPicker index ->
+                    case model.zone of
+                        Just zone ->
+                            let
+                                ( newItems, newMsg ) =
+                                    updated model model.items model.firestore index (openPicker model zone)
+                            in
+                            ( { model | items = newItems }, newMsg )
+
+                        Nothing ->
+                            ( model, Cmd.none )
+
         bullets =
             Debug.log "logging this" (Json.Encode.encode 0 (encoder newModel.items))
 
@@ -654,6 +673,24 @@ updated model lst fs i func =
     )
 
 
+openPicker : Model -> Time.Zone -> Bullet -> Bullet
+openPicker model zone bullet =
+    let
+        datePicker =
+            DP.openPicker (Settings.defaultSettings zone) model.currentTime bullet.pickedTime bullet.picker
+    in
+    { bullet | picker = datePicker }
+
+
+updateDatePicker : DP.Msg -> Time.Zone -> Bullet -> Bullet
+updateDatePicker dpMsg zone bullet =
+    let
+        ( newPicker, maybeTime ) =
+            DP.update (Settings.defaultSettings zone) dpMsg bullet.picker
+    in
+    { bullet | picker = newPicker, pickedTime = maybeTime }
+
+
 updateCheckedOff : Bool -> Bullet -> Bullet
 updateCheckedOff bool b =
     { b | checked = bool }
@@ -709,6 +746,41 @@ standardTime time =
 
 
 --View
+
+
+viewDatePicker : Int -> Bullet -> Model -> Html Msg
+viewDatePicker index bullet model =
+    case model.zone of
+        Just zone ->
+            div []
+                [ button [ onClick (OpenPicker index) ] [ text "Add a due date", DP.view (Settings.defaultSettings zone) bullet.picker ] ]
+
+        -- formatDate
+        Nothing ->
+            text "no zone"
+
+
+formatDate : Time.Zone -> Bullet -> Html Msg
+formatDate zone bullet =
+    case bullet.pickedTime of
+        Just time ->
+            let
+                date =
+                    Date.fromPosix zone time
+
+                day =
+                    Date.day date
+
+                month =
+                    Date.monthToNumber (Date.month date)
+
+                year =
+                    Date.year date
+            in
+            text (String.fromInt month ++ "-" ++ String.fromInt day ++ "-" ++ String.fromInt year)
+
+        Nothing ->
+            text "No date selected"
 
 
 viewModal : Model -> Int -> Bullet -> Html Msg
@@ -1221,6 +1293,8 @@ decodeBullet =
         |> Json.Decode.Pipeline.required "nav" Decode.string
         |> Json.Decode.Pipeline.required "day" Decode.int
         |> Json.Decode.Pipeline.required "notes" Decode.string
+        |> Json.Decode.Pipeline.required "picker"
+        |> Json.Decode.Pipeline.required "pickedTime" (Decode.maybe Iso.decoder)
 
 
 decodeTimeOfDay : Decode.Decoder TimeOfDay
@@ -1264,6 +1338,8 @@ codecBullet =
         |> Codec.required "nav" .nav Codec.string
         |> Codec.required "day" .day Codec.int
         |> Codec.required "notes" .notes Codec.string
+        |> Codec.required "picker" .picker
+        |> Codec.required "pickedTime" .pickedTime (Codec.maybe Codec.timestamp)
         |> Codec.build
 
 
