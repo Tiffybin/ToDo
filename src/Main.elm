@@ -124,6 +124,21 @@ type alias Bullet =
     }
 
 
+type alias DbBullet =
+    { title : String
+    , time : Time.Posix
+    , timeOfDay : Maybe TimeOfDay
+    , progress : Maybe Status
+    , checked : Bool
+    , dropdownStatus : Maybe DropDownStatus
+    , selectedMonth : String
+    , nav : Nav
+    , day : Int
+    , notes : String
+    , pickedTime : Maybe Time.Posix
+    }
+
+
 type TimeOfDay
     = Morning
     | Evening
@@ -153,8 +168,8 @@ type Msg
     | UpdateTimeOfDay Int TimeOfDay
     | Progress Int Status
     | CheckedOff Int Bool
-    | Get (Result Firestore.Error (Firestore.Documents Bullet))
-    | Upsert (Result Firestore.Error (Firestore.Document Bullet))
+    | Get (Result Firestore.Error (Firestore.Documents DbBullet))
+    | Upsert (Result Firestore.Error (Firestore.Document DbBullet))
     | DeleteFromDB (Result Firestore.Error ())
     | GetFromDB
     | SearchAndRemoved String
@@ -173,7 +188,7 @@ type Msg
     | NoOp
     | UpdateNotes Int String
     | SortingNavWith (Maybe Nav)
-    | UpdatePicker Int DP.Msg
+    | UpdatePicker Time.Posix DP.Msg
     | OpenPicker Int
 
 
@@ -195,7 +210,7 @@ getFromDb user firestore =
         |> Firestore.subCollection "Bullets"
         |> Firestore.build
         |> toTask
-        |> Task.andThen (Firestore.list (Codec.asDecoder codecBullet) Firestore.Options.List.default)
+        |> Task.andThen (Firestore.list (Codec.asDecoder codecDbBullet) Firestore.Options.List.default)
         |> Task.attempt Get
 
 
@@ -226,7 +241,7 @@ upsertNav user fs n =
         |> Task.attempt (\_ -> NoOp)
 
 
-upsertBullet : Flags -> Firestore.Firestore -> Bullet -> Cmd Msg
+upsertBullet : Flags -> Firestore.Firestore -> DbBullet -> Cmd Msg
 upsertBullet user f b =
     let
         time =
@@ -240,7 +255,7 @@ upsertBullet user f b =
         |> Firestore.document time
         |> Firestore.build
         |> toTask
-        |> Task.andThen (Firestore.upsert (Codec.asDecoder codecBullet) (Codec.asEncoder codecBullet b))
+        |> Task.andThen (Firestore.upsert (Codec.asDecoder codecDbBullet) (Codec.asEncoder codecDbBullet b))
         |> Task.attempt Upsert
 
 
@@ -295,7 +310,7 @@ update msg model =
 
                 AddAfter psx ->
                     let
-                        bullet =
+                        dbBullet =
                             { title = model.userInput
                             , time = psx
                             , timeOfDay = Maybe.Nothing
@@ -306,19 +321,17 @@ update msg model =
                             , nav = ""
                             , day = 0
                             , notes = ""
-                            , picker = DP.init (UpdatePicker 0)
-
-                            --not sure if it should be 0
+                            , picker = DP.init (UpdatePicker psx)
                             , pickedTime = Nothing
                             }
                     in
                     ( { model
                         | items =
-                            bullet :: model.items
+                            model.items ++ [ dbBullet ]
                       }
                     , upsertBullet model.users
                         model.firestore
-                        bullet
+                        dbBullet
                     )
 
                 AddBefore ->
@@ -329,10 +342,10 @@ update msg model =
 
                 Edit i newString ->
                     let
-                        editString =
+                        ( newItems, newmsg ) =
                             updated model model.items model.firestore i (editBullet newString)
                     in
-                    ( { model | items = Tuple.first editString }, Tuple.second editString )
+                    ( { model | items = List.map (\dbBullet -> copyDbContents dbBullet) newItems }, newmsg )
 
                 DragDropMsg dragDrop ->
                     let
@@ -540,12 +553,12 @@ update msg model =
                 SortingNavWith nav ->
                     ( { model | navSortingWith = nav }, Cmd.none )
 
-                UpdatePicker index dpMsg ->
+                UpdatePicker timeIdentifier dpMsg ->
                     case model.zone of
                         Just zone ->
                             let
                                 ( newItems, newMsg ) =
-                                    updated model model.items model.firestore index (updateDatePicker dpMsg zone)
+                                    updatedWithTime model model.items model.firestore timeIdentifier (updateDatePicker dpMsg zone)
                             in
                             ( { model | items = newItems }, newMsg )
 
@@ -571,6 +584,27 @@ update msg model =
             Json.Encode.encode 0 (encoderNav newModel.list)
     in
     ( newModel, Cmd.batch [ save bullets, cmd, save navs ] )
+
+
+copyDbContents : DbBullet -> Bullet
+copyDbContents dbB =
+    let
+        bullet =
+            { title = dbB.title
+            , time = dbB.time
+            , timeOfDay = dbB.timeOfDay
+            , progress = dbB.progress
+            , checked = dbB.checked
+            , dropdownStatus = dbB.dropdownStatus
+            , selectedMonth = dbB.selectedMonth
+            , nav = dbB.nav
+            , day = dbB.day
+            , notes = dbB.notes
+            , picker = DP.init (UpdatePicker dbB.time)
+            , pickedTime = dbB.pickedTime
+            }
+    in
+    bullet
 
 
 updatePopUpStatus : Model -> Bool -> Model
@@ -655,7 +689,25 @@ filterNavs nav list =
     List.filter (\bullet -> bullet.nav == nav) list
 
 
-updated : Model -> List Bullet -> Firestore.Firestore -> Int -> (Bullet -> Bullet) -> ( List Bullet, Cmd Msg )
+updatedWithTime : Model -> List Bullet -> Firestore.Firestore -> Time.Posix -> (DbBullet -> DbBullet) -> ( List Bullet, Cmd Msg )
+updatedWithTime model lst fs time func =
+    let
+        newItems =
+            List.Extra.updateIf (\bullet -> bullet.time == time) func lst
+    in
+    ( newItems
+    , case
+        List.Extra.find (\bullet -> bullet.time == time) newItems
+      of
+        Just bullet ->
+            upsertBullet model.users fs bullet
+
+        Nothing ->
+            Cmd.none
+    )
+
+
+updated : Model -> List Bullet -> Firestore.Firestore -> Int -> (DbBullet -> DbBullet) -> ( List DbBullet, Cmd Msg )
 updated model lst fs i func =
     let
         newItems =
@@ -691,22 +743,22 @@ updateDatePicker dpMsg zone bullet =
     { bullet | picker = newPicker, pickedTime = maybeTime }
 
 
-updateCheckedOff : Bool -> Bullet -> Bullet
+updateCheckedOff : Bool -> DbBullet -> DbBullet
 updateCheckedOff bool b =
     { b | checked = bool }
 
 
-updateProgress : Maybe Status -> Bullet -> Bullet
+updateProgress : Maybe Status -> DbBullet -> DbBullet
 updateProgress status b =
     { b | progress = status }
 
 
-updateTimeOfDay : Maybe TimeOfDay -> Bullet -> Bullet
+updateTimeOfDay : Maybe TimeOfDay -> DbBullet -> DbBullet
 updateTimeOfDay t b =
     { b | timeOfDay = t }
 
 
-updateTime : Time.Posix -> Bullet -> Bullet
+updateTime : Time.Posix -> DbBullet -> DbBullet
 updateTime t b =
     { b | time = t }
 
@@ -721,7 +773,7 @@ getTime =
     Task.perform AddAfter Time.now
 
 
-editBullet : String -> Bullet -> Bullet
+editBullet : String -> DbBullet -> DbBullet
 editBullet newString bullet =
     { bullet | title = newString }
 
@@ -1250,84 +1302,9 @@ encodeDropDown dropDownStatus =
             "Month"
 
 
-decoder : String -> List Bullet
-decoder string =
-    case Decode.decodeString decodeListBullets string of
-        Ok str ->
-            str
-
-        Err _ ->
-            []
-
-
-decoderNav : String -> List Nav
-decoderNav string =
-    case Decode.decodeString decodeListNav string of
-        Ok str ->
-            str
-
-        Err _ ->
-            []
-
-
-decodeListBullets : Decode.Decoder (List Bullet)
-decodeListBullets =
-    Decode.list decodeBullet
-
-
-decodeListNav : Decode.Decoder (List Nav)
-decodeListNav =
-    Decode.list Decode.string
-
-
-decodeBullet : Decode.Decoder Bullet
-decodeBullet =
-    Decode.succeed Bullet
-        |> Json.Decode.Pipeline.required "input" Decode.string
-        |> Json.Decode.Pipeline.required "time" Iso.decoder
-        |> Json.Decode.Pipeline.required "timeOfDay" (Decode.maybe decodeTimeOfDay)
-        |> Json.Decode.Pipeline.required "progress" (Decode.maybe decodeStatus)
-        |> Json.Decode.Pipeline.required "checked" Decode.bool
-        |> Json.Decode.Pipeline.required "dropdownStatus" (Decode.maybe decodeDropDown)
-        |> Json.Decode.Pipeline.required "selectedMonth" Decode.string
-        |> Json.Decode.Pipeline.required "nav" Decode.string
-        |> Json.Decode.Pipeline.required "day" Decode.int
-        |> Json.Decode.Pipeline.required "notes" Decode.string
-        |> Json.Decode.Pipeline.required "picker"
-        |> Json.Decode.Pipeline.required "pickedTime" (Decode.maybe Iso.decoder)
-
-
-decodeTimeOfDay : Decode.Decoder TimeOfDay
-decodeTimeOfDay =
-    Decode.oneOf [ decoderExactString "Morning" Morning, decoderExactString "Afternoon" Afternoon, decoderExactString "Evening" Evening ]
-
-
-decodeStatus : Decode.Decoder Status
-decodeStatus =
-    Decode.oneOf [ decoderExactString "Completed" Completed, decoderExactString "In Progress" InProgress, decoderExactString "Not Started" NotStarted ]
-
-
-decodeDropDown : Decode.Decoder DropDownStatus
-decodeDropDown =
-    Decode.oneOf [ decoderExactString "NavSelect" NavSelect, decoderExactString "Month" Month ]
-
-
-decoderExactString : String -> b -> Decode.Decoder b
-decoderExactString expected t =
-    Decode.string
-        |> Decode.andThen
-            (\actual ->
-                if actual == expected then
-                    Decode.succeed t
-
-                else
-                    Decode.fail "doesn't match"
-            )
-
-
-codecBullet : Codec.Codec Bullet
-codecBullet =
-    Codec.document Bullet
+codecDbBullet : Codec.Codec DbBullet
+codecDbBullet =
+    Codec.document DbBullet
         |> Codec.required "title" .title Codec.string
         |> Codec.required "time" .time Codec.timestamp
         |> Codec.required "timeOfDay" .timeOfDay (Codec.maybe codecTime)
@@ -1338,7 +1315,6 @@ codecBullet =
         |> Codec.required "nav" .nav Codec.string
         |> Codec.required "day" .day Codec.int
         |> Codec.required "notes" .notes Codec.string
-        |> Codec.required "picker" .picker
         |> Codec.required "pickedTime" .pickedTime (Codec.maybe Codec.timestamp)
         |> Codec.build
 
